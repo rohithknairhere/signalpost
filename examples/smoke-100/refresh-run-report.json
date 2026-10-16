@@ -1,0 +1,135 @@
+{
+  "agent": "signalpost-agent/1.0.0",
+  "run_id": "smoke-100-refresh",
+  "started_at": "2026-10-16T13:40:32Z",
+  "completed_at": "2026-10-16T13:45:08Z",
+  "runtime_seconds": 276.2,
+  "expected_count": 100,
+  "input_count": 100,
+  "emitted_envelopes": 100,
+  "plan": {
+    "tier": "full",
+    "years": true,
+    "registry": [
+      "registry_live",
+      "roles",
+      "locations",
+      "financials"
+    ],
+    "candidates": 4,
+    "pages": 7,
+    "nav_pages": 200,
+    "allowance": 16.7
+  },
+  "registry_snapshot": {
+    "source": null,
+    "sha256": null,
+    "rows_scanned": 0,
+    "matched": null,
+    "seconds": null
+  },
+  "operations": {
+    "requests": 1431,
+    "request_budget": 1900,
+    "requests_by_module": {
+      "dns": 463,
+      "financial_history": 100,
+      "financials": 100,
+      "jobs_nav": 3,
+      "locations": 100,
+      "registry_live": 100,
+      "reviews": 62,
+      "roles": 100,
+      "website": 401,
+      "website_identity": 1,
+      "wikidata": 1
+    },
+    "bytes": 23878303,
+    "p50_ms": 638,
+    "p95_ms": 3036,
+    "third_party_cost_usd": 0.0,
+    "llm_calls": 0
+  },
+  "wikidata": {
+    "status": "available",
+    "requests": 1,
+    "error": null,
+    "matched": 1
+  },
+  "jobs_feed": {
+    "status": "available",
+    "error": null,
+    "pages_read": 2,
+    "items_indexed": 43514,
+    "window": {
+      "from": "2026-08-02T16:16:23.353847+02:00",
+      "to": "2026-10-16T15:39:32.405756+02:00"
+    }
+  },
+  "family_availability": {
+    "legal_identity": {
+      "available": 100
+    },
+    "annual_accounts": {
+      "available": 100
+    },
+    "account_history": {
+      "available": 100
+    },
+    "leadership": {
+      "available": 100
+    },
+    "registered_workplaces": {
+      "available": 73,
+      "not_available": 27
+    },
+    "official_website": {
+      "blocked": 1,
+      "not_available": 69,
+      "available": 7,
+      "ambiguous": 23
+    },
+    "public_brand": {
+      "blocked": 1,
+      "not_available": 69,
+      "available": 8,
+      "ambiguous": 22
+    },
+    "company_profiles": {
+      "blocked": 1,
+      "not_available": 74,
+      "ambiguous": 23,
+      "available": 2
+    },
+    "website_contact": {
+      "blocked": 1,
+      "not_available": 70,
+      "available": 6,
+      "ambiguous": 23
+    },
+    "hiring": {
+      "not_available": 99,
+      "available": 1
+    },
+    "ratings_reviews": {
+      "not_available": 48,
+      "not_applicable": 42,
+      "available": 10
+    },
+    "public_activity": {
+      "available": 100
+    }
+  },
+  "companies_with_verified_website": 7,
+  "companies_with_job_postings": 0,
+  "material_changes": 0,
+  "validation": {
+    "exact_expected_count": true,
+    "one_envelope_per_input": true,
+    "all_terminal": true,
+    "all_family_states_valid": true,
+    "every_claim_has_evidence": true,
+    "passed": true
+  },
+  "viewer": "out2/site/index.html"
+}

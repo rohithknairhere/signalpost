@@ -43,3 +43,12 @@ next-env.d.ts
 # jbox
 /.jbox
 jbox
+# python agent
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+/state/
+/out/
+brreg-enheter.csv*
+/runs/

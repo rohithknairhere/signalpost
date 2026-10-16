@@ -1,11 +1,13 @@
 {
-  "name": "next-app",
+  "name": "signalpost",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.16.1",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:static": "SIGNALPOST_STATIC_EXPORT=1 next build",
+    "typecheck": "tsc --noEmit",
     "start": "next start",
     "lint": "eslint"
   },

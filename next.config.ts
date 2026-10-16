@@ -1,7 +1,11 @@
+// @ts-ignore - JBOX managed JavaScript helper
+import __withJboxAssets from "./jbox.asset-redirects.cjs";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  output: process.env.SIGNALPOST_STATIC_EXPORT === '1' ? "export" : "standalone",
+  trailingSlash: true,
+  images: { unoptimized: true },
   // Allow preview subdomains for Keystone preview system
   allowedDevOrigins: [
     "preview.localhost",
@@ -9,15 +13,7 @@ const nextConfig: NextConfig = {
     "preview.jboxai.com",
     "*.preview.jboxai.com",
   ],
-  images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "images.unsplash.com",
-        pathname: "/**",
-      },
-    ],
-  },
+
 };
 
-export default nextConfig;
+export default __withJboxAssets(nextConfig);

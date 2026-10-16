@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .assemble import FAMILIES
+from .assemble import FAMILIES, OPTIONAL_FAMILIES
 
 
 def _fmt_amount(value: dict[str, Any] | None) -> str | None:
@@ -92,6 +92,10 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
     if trend:
         direction = "grew" if trend["change_pct"] > 0 else "fell" if trend["change_pct"] < 0 else "was flat"
         say(f"Revenue {direction} {abs(trend['change_pct'])}% from {trend['from_year']} to {trend['to_year']} (computed from filed values).", "revenue_change_yoy")
+    workforce = value("full_time_equivalents") or value("average_employees")
+    if workforce:
+        label = "full-time equivalents" if "full_time_equivalents" in claims else "employees on average"
+        say(f"Its {workforce['year']} annual report states {workforce['value']:g} {label}.", "full_time_equivalents", "average_employees")
     employees = value("registered_employees")
     if isinstance(employees, int):
         say(f"It has {employees} registered employees.", "registered_employees")
@@ -110,6 +114,9 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
     if jobs:
         titles = ", ".join(sorted({str(job.get('title') or '')[:60] for job in jobs if job.get("title")})[:3])
         say(f"It appears to be hiring: {len(jobs)} active NAV posting{'s' if len(jobs) != 1 else ''} ({titles}).", "active_job_postings")
+    elif value("website_job_postings"):
+        site_jobs = value("website_job_postings")
+        say(f"Its website lists {len(site_jobs)} open position{'s' if len(site_jobs) != 1 else ''} ({', '.join(job['title'][:50] for job in site_jobs[:3])}).", "website_job_postings")
     elif value("careers_page"):
         say("Its website has a careers page, but no active NAV postings were found.", "careers_page")
     rating = value("customer_rating")
@@ -127,7 +134,7 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
 
     # Unknowns: families we could not fill, with the honest state.
     unknowns = [
-        {"family": family, "label": FAMILIES[family], "availability": info["availability"], "reason": info.get("reason")}
+        {"family": family, "label": FAMILIES.get(family, OPTIONAL_FAMILIES.get(family, family)), "availability": info["availability"], "reason": info.get("reason")}
         for family, info in families.items() if info["availability"] != "available"
     ]
     summary = " ".join(sentence["text"] for sentence in sentences)

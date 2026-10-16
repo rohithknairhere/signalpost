@@ -206,3 +206,29 @@ def test_org_number_hidden_in_script_data_counts():
 def test_housing_manager_site_never_verifies_a_member_company():
     p = page("<html><body>OBOS Eiendomsforvaltning. Strandgata 21, 4307 Sandnes. Tlf 51 66 00 00 post@sandneselektriske.no</body></html>", url="https://www.obos.no/")
     assert assess(identity(), [p], "registry_website", "www.obos.no")["verdict"] != "exact"
+
+
+def test_annual_report_workforce_parsing():
+    from signalpost_agent.annual_report import parse_workforce
+
+    assert parse_workforce("Note 2 - Antall arsverk\nAntall arsverk sysselsatt i regnskapsaret: 8,87")["value"] == 8.87
+    assert parse_workforce("Selskapet har ikke hatt noen ansatte i 2025.")["kind"] == "no_employees"
+    assert parse_workforce("Gjennomsnittlig antall ansatte i regnskapsaret: 12")["kind"] == "average_employees"
+    assert parse_workforce("Lonnskostnader 1 234 567") is None
+
+
+def test_jobposting_structured_data_on_company_site():
+    from signalpost_agent.website import extract_job_postings
+
+    html = ('<html><head><script type="application/ld+json">{"@type":"JobPosting","title":"Elektriker","datePosted":"2026-10-01",'
+            '"validThrough":"2099-01-01","jobLocation":{"address":{"addressLocality":"Sandnes"}}}</script>'
+            '<script type="application/ld+json">{"@type":"JobPosting","title":"Old job","validThrough":"2020-01-01"}</script></head><body>Jobb</body></html>')
+    jobs = extract_job_postings([page(html, kind="careers")], "sandneselektriske.no")
+    assert [job["title"] for job in jobs] == ["Elektriker"] and jobs[0]["location"] == "Sandnes"
+
+
+def test_foreign_parent_profile_not_published_for_norwegian_company():
+    html = '<html><body><a href="https://www.linkedin.com/company/sandnes-elektriske-ab">LinkedIn</a></body></html>'
+    pages = [page(html), page(html, url="https://sandneselektriske.no/om-oss", kind="about")]
+    facts = extract_facts(pages, identity(), "sandneselektriske.no")
+    assert not [p for p in facts["social_profiles"] if p["publishable"]]

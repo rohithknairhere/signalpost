@@ -66,6 +66,7 @@ SHARED_SERVICE_DOMAINS = {
     "wixsite.com", "squarespace.com", "webnode.com", "weebly.com", "blogspot.com", "wordpress.com", "github.io",
     "mittanbud.no", "fagfolkguiden.no", "purehelp.no", "brreg.no", "google.com", "sites.google.com",
 }
+FOREIGN_LEGAL_SUFFIXES = {"ab", "aps", "oy", "oyj", "gmbh", "ag", "ltd", "limited", "inc", "llc", "bv", "nv", "sarl", "sas", "srl", "spa", "plc", "corp", "group"}
 CREDIT_RE = re.compile(r"(levert av|utviklet av|laget av|designet av|design av|design:|nettside av|webdesign|powered by|designed by|developed by|theme by|made by|built by|drevet av)")
 SOCIAL_VENDOR_HANDLES = {"theme_fusion", "themefusion", "envato", "elegantthemes", "elegant_themes", "wix", "wixcom", "squarespace",
                          "webflow", "framer", "godaddy", "onecom", "one_com", "domeneshop", "hostinger", "wordpressdotcom",
@@ -560,7 +561,7 @@ def _research_one(fetcher: Fetcher, identity: Identity, url: str, source: str, *
             links[kind] = [urllib.parse.urljoin(home.url, path)]
     queue: list[tuple[str, str]] = []
     for kind in order:
-        for link in links.get(kind, [])[:1]:
+        for link in links.get(kind, [])[:(2 if kind in {"news", "careers"} and first_check["verdict"] == "exact" else 1)]:
             if link not in {item[0] for item in queue}:
                 queue.append((link, kind))
     budget_pages = max_pages - 1
@@ -685,6 +686,11 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         )
         if entry["handle"].lower().replace("-", "_") in SOCIAL_VENDOR_HANDLES:
             entry["handle_matches_name"] = False
+        handle_parts = re.split(r"[^a-z0-9]+", ascii_fold(entry["handle"]))
+        if handle_parts and handle_parts[-1] in FOREIGN_LEGAL_SUFFIXES and handle_parts[-1] not in tokens(identity.name):
+            # e.g. "protech-ab" on a Norwegian AS's group site: the foreign parent's profile.
+            entry["handle_matches_name"] = False
+            entry["methods"].discard("jsonld_sameAs")
         by_platform.setdefault(entry["platform"], []).append(entry)
     profiles = []
     for platform, entries in by_platform.items():
@@ -731,6 +737,7 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
             break
     careers = next((page for page in pages if page.kind == "careers" and page.text), None)
     news = extract_news(pages, domain)
+    job_postings = extract_job_postings(pages, domain)
     founding = next((str(node.get("foundingDate")) for node in jsonld_orgs if node.get("foundingDate")), None)
     return {
         "brand_name": brand or None,
@@ -741,9 +748,34 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         "phones": site_phones,
         "careers_page": {"url": careers.url, "title": careers.title, "retrieved_at": careers.retrieved_at, "sha256": careers.sha256} if careers else None,
         "news": news,
+        "job_postings": job_postings,
         "jsonld_founding_date": founding,
         "language": (home.soup.html.get("lang") if home.soup is not None and home.soup.html else None),
     }
+
+
+def extract_job_postings(pages: list[Page], domain: str, limit: int = 15) -> list[dict[str, Any]]:
+    """schema.org JobPosting published on the company's own pages (still open only)."""
+    today_iso = date.today().isoformat()
+    found: dict[str, dict[str, Any]] = {}
+    for page in pages:
+        for node in _walk_jsonld(page.jsonld):
+            if "JobPosting" not in _jsonld_types(node):
+                continue
+            title = clean_text(node.get("title") or node.get("name"), 160)
+            posted = str(node.get("datePosted") or "")[:10]
+            valid = str(node.get("validThrough") or "")[:10]
+            if not title or (valid and valid < today_iso):
+                continue
+            url = node.get("url") or page.url
+            location = node.get("jobLocation")
+            if isinstance(location, list):
+                location = location[0] if location else None
+            city = ((location or {}).get("address") or {}).get("addressLocality") if isinstance(location, dict) and isinstance((location or {}).get("address"), dict) else None
+            found.setdefault(f"{title}|{url}", {"title": title, "date_posted": posted or None, "valid_through": valid or None, "location": city,
+                                               "employment_type": node.get("employmentType") if isinstance(node.get("employmentType"), str) else None,
+                                               "url": str(url), "found_on": page.url, "sha256": page.sha256, "retrieved_at": page.retrieved_at})
+    return sorted(found.values(), key=lambda item: item.get("date_posted") or "", reverse=True)[:limit]
 
 
 def extract_news(pages: list[Page], domain: str, limit: int = 8) -> list[dict[str, Any]]:

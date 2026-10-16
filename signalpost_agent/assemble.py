@@ -27,6 +27,9 @@ FAMILIES = {
     "ratings_reviews": "Customer ratings and reviews",
 }
 
+# Families that exist only when their module ran (e.g. OCR tools installed).
+OPTIONAL_FAMILIES = {"workforce": "Workforce (annual report)"}
+
 ROLE_PRIORITY = {"DAGL": 0, "LEDE": 1, "NEST": 2, "KOMP": 3, "INNH": 3, "DTPR": 3, "DTSO": 3, "BEST": 4, "MEDL": 5, "VARA": 7, "OBS": 8, "REVI": 9, "REGN": 10, "KONT": 11, "FFØR": 12}
 
 ALWAYS_FILE = {"AS", "ASA", "BRL", "BBL", "STI", "SF", "VPFO"}
@@ -105,7 +108,7 @@ def _meta_state(module: dict[str, Any] | None) -> tuple[str, str]:
     return "failed", f"registry request failed ({meta.get('error') or status})"
 
 
-def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[str, Any], registry: dict[str, Any], website: dict[str, Any] | None, jobs: dict[str, Any] | None, run_started: str, *, wikidata: dict[str, Any] | None = None, wikidata_status: dict[str, Any] | None = None, reviews: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[str, Any], registry: dict[str, Any], website: dict[str, Any] | None, jobs: dict[str, Any] | None, run_started: str, *, wikidata: dict[str, Any] | None = None, wikidata_status: dict[str, Any] | None = None, reviews: dict[str, Any] | None = None, workforce: dict[str, Any] | None = None) -> dict[str, Any]:
     b = Builder(org)
     live = registry.get("registry_live") or {}
     entity = live.get("body") if _meta_ok(live) else None
@@ -297,6 +300,10 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
         contact_ev = b.add_evidence(contact_page.get("url") or home.get("url"), "company_owned_website", contact_page.get("retrieved_at"), contact_page.get("sha256"), span="contact details on the verified website")
         b.claim("website_contact", "website_emails", extracted.get("emails"), [contact_ev], confidence=0.95)
         b.claim("website_contact", "website_phones", ["+47 " + phone for phone in extracted.get("phones") or []], [contact_ev], confidence=0.9)
+        site_jobs = extracted.get("job_postings") or []
+        if site_jobs:
+            job_evs = sorted({b.add_evidence(job["found_on"], "company_owned_website", job.get("retrieved_at"), job.get("sha256"), span=f"schema.org JobPosting: {job['title']}") for job in site_jobs})
+            b.claim("hiring", "website_job_postings", [{key: job.get(key) for key in ("title", "date_posted", "valid_through", "location", "employment_type", "url")} for job in site_jobs], job_evs, confidence=0.95, method="jsonld_jobposting_on_verified_site")
         careers = extracted.get("careers_page")
         if careers:
             careers_ev = b.add_evidence(careers["url"], "company_owned_website", careers.get("retrieved_at"), careers.get("sha256"), span="careers page")
@@ -388,6 +395,20 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
     else:
         b.family("ratings_reviews", reviews.get("status") or "failed", reviews.get("reason") or reviews.get("error") or "no Fagfolkguiden profile for this organisation number")
 
+    # ---------------- workforce from the annual-report filing copy (OCR)
+    if workforce is not None:
+        if workforce.get("status") == "available":
+            year = workforce.get("year")
+            period = next((c.get("reporting_period") for c in b.claims if c["field"] == "accounts_year" and str(c["value"]) == str(year)), None) or f"{year}-01-01/{year}-12-31"
+            wf_ev = b.add_evidence(workforce["url"], "official_annual_account_copy", workforce.get("retrieved_at"), workforce.get("sha256"), span=f"page {workforce.get('page')} (OCR): {workforce.get('span')}", period=period)
+            if workforce["kind"] == "no_employees":
+                b.claim("workforce", "no_employees_stated", True, [wf_ev], confidence=0.9, period=period, method="ocr_annual_report")
+            else:
+                b.claim("workforce", workforce["kind"], {"value": workforce["value"], "year": year}, [wf_ev], confidence=0.9, period=period, method="ocr_annual_report")
+            b.family("workforce", "available", f"stated in the {year} annual-account filing copy (OCR, page {workforce.get('page')})")
+        else:
+            b.family("workforce", workforce.get("status") or "failed", workforce.get("reason") or workforce.get("error") or "annual report not read")
+
     # ---------------- dated public activity
     events = []
     def add_event(day: Any, kind: str, text: str, evidence_id: str) -> None:
@@ -421,6 +442,10 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
             add_event(job.get("published"), "job_posted", f"Job posted: {job.get('title')}", ev)
     for day, text, evidence_id in review_events:
         add_event(day, "customer_review", text, evidence_id)
+    for job in extracted.get("job_postings") or []:
+        ev = next((e["id"] for e in b.evidence.values() if e["source_url"] == job["found_on"]), None)
+        if ev:
+            add_event(job.get("date_posted"), "job_posted", f"Job posted on company site: {job['title']}", ev)
     for item in extracted.get("news") or []:
         ev = b.add_evidence(item["found_on"], "company_owned_website", item.get("retrieved_at"), item.get("sha256"), span=f"{item['date']}: {item['title']}")
         add_event(item["date"], "company_news", f"{item['title']} ({item['url']})", ev)

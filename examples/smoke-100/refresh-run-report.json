@@ -1,9 +1,9 @@
 {
   "agent": "signalpost-agent/1.0.0",
   "run_id": "smoke-100-refresh",
-  "started_at": "2026-10-16T13:40:32Z",
-  "completed_at": "2026-10-16T13:45:08Z",
-  "runtime_seconds": 276.2,
+  "started_at": "2026-10-16T17:25:51Z",
+  "completed_at": "2026-10-16T17:34:16Z",
+  "runtime_seconds": 504.5,
   "expected_count": 100,
   "input_count": 100,
   "emitted_envelopes": 100,
@@ -17,7 +17,7 @@
       "financials"
     ],
     "candidates": 4,
-    "pages": 7,
+    "pages": 9,
     "nav_pages": 200,
     "allowance": 16.7
   },
@@ -29,24 +29,25 @@
     "seconds": null
   },
   "operations": {
-    "requests": 1431,
+    "requests": 1542,
     "request_budget": 1900,
     "requests_by_module": {
+      "annual_report": 100,
       "dns": 463,
       "financial_history": 100,
       "financials": 100,
-      "jobs_nav": 3,
+      "jobs_nav": 2,
       "locations": 100,
       "registry_live": 100,
-      "reviews": 62,
+      "reviews": 60,
       "roles": 100,
-      "website": 401,
+      "website": 415,
       "website_identity": 1,
       "wikidata": 1
     },
-    "bytes": 23878303,
-    "p50_ms": 638,
-    "p95_ms": 3036,
+    "bytes": 50436667,
+    "p50_ms": 647,
+    "p95_ms": 7108,
     "third_party_cost_usd": 0.0,
     "llm_calls": 0
   },
@@ -56,14 +57,18 @@
     "error": null,
     "matched": 1
   },
+  "annual_report_ocr": {
+    "enabled": true,
+    "detail": "eng"
+  },
   "jobs_feed": {
     "status": "available",
     "error": null,
-    "pages_read": 2,
-    "items_indexed": 43514,
+    "pages_read": 1,
+    "items_indexed": 43574,
     "window": {
-      "from": "2026-08-02T16:16:23.353847+02:00",
-      "to": "2026-10-16T15:39:32.405756+02:00"
+      "from": "2026-08-02T21:19:32.966007+02:00",
+      "to": "2026-10-16T19:02:02.112382+02:00"
     }
   },
   "family_availability": {
@@ -85,27 +90,27 @@
     },
     "official_website": {
       "blocked": 1,
-      "not_available": 69,
+      "not_available": 70,
       "available": 7,
-      "ambiguous": 23
+      "ambiguous": 22
     },
     "public_brand": {
       "blocked": 1,
-      "not_available": 69,
+      "not_available": 70,
       "available": 8,
-      "ambiguous": 22
+      "ambiguous": 21
     },
     "company_profiles": {
       "blocked": 1,
-      "not_available": 74,
-      "ambiguous": 23,
+      "not_available": 75,
+      "ambiguous": 22,
       "available": 2
     },
     "website_contact": {
       "blocked": 1,
-      "not_available": 70,
+      "not_available": 71,
       "available": 6,
-      "ambiguous": 23
+      "ambiguous": 22
     },
     "hiring": {
       "not_available": 99,
@@ -115,6 +120,9 @@
       "not_available": 48,
       "not_applicable": 42,
       "available": 10
+    },
+    "workforce": {
+      "available": 100
     },
     "public_activity": {
       "available": 100
@@ -131,5 +139,5 @@
     "every_claim_has_evidence": true,
     "passed": true
   },
-  "viewer": "out2/site/index.html"
+  "viewer": "out/site/index.html"
 }

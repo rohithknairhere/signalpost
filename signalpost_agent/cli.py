@@ -26,6 +26,8 @@ from .jobs import NavJobIndex
 from .net import BudgetExhausted, Fetcher
 from .refresh import apply_refresh, load_previous, load_previous_jsonl
 from .registry import fetch_account_years, fetch_registry, load_bulk, normalize_subunits
+from .annual_report import ocr_available, read_workforce
+from .assemble import ALWAYS_FILE
 from .reviews import applies as reviews_applies, fetch_rating
 from .synthesis import synthesize
 from .wikidata import best_website, lookup as wikidata_lookup
@@ -72,7 +74,7 @@ def plan_for(n: int, max_requests: int) -> dict[str, Any]:
     nav_pages = 200 if n <= 200 else 80 if n <= 600 else 30
     allowance = (max_requests - nav_pages - 30) / max(n, 1)
     if allowance >= 12:
-        return {"tier": "full", "years": n <= 400, "registry": ["registry_live", "roles", "locations", "financials"], "candidates": 4, "pages": 7, "nav_pages": nav_pages, "allowance": round(allowance, 1)}
+        return {"tier": "full", "years": n <= 400, "registry": ["registry_live", "roles", "locations", "financials"], "candidates": 4, "pages": 9, "nav_pages": nav_pages, "allowance": round(allowance, 1)}
     if allowance >= 6:
         return {"tier": "reduced", "years": False, "registry": ["registry_live", "roles", "locations", "financials"], "candidates": 1, "pages": 3, "nav_pages": nav_pages, "allowance": round(allowance, 1)}
     return {"tier": "minimal", "years": False, "registry": ["roles", "financials"], "candidates": 1, "pages": 2, "nav_pages": min(nav_pages, 30), "allowance": round(allowance, 1)}
@@ -254,11 +256,25 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
         else:
             reviews_result = {"status": "failed", "error": "request budget reserved for core sources"}
 
+    workforce_result: dict[str, Any] | None = None
+    ocr_ok, ocr_lang = ctx["ocr"]
+    if ocr_ok and entity and len(org) == 9:
+        year = str(entity.get("sisteInnsendteAarsregnskap") or "")
+        form = str((entity.get("organisasjonsform") or {}).get("kode") or "")
+        if not year.isdigit():
+            workforce_result = {"status": "not_applicable" if form not in ALWAYS_FILE else "not_available", "reason": "no filed annual accounts registered"}
+        else:
+            try:
+                workforce_result = read_workforce(fetcher, org, year, language=ocr_lang)
+            except Exception as exc:
+                errors.append({"stage": "annual_report", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+                workforce_result = {"status": "failed", "error": type(exc).__name__}
+
     if plan["years"] and len(org) == 9 and fetcher.seconds_left() > 120:
         # Rate-limited endpoint (~30/min): read last so it never delays the other sources.
         registry["financial_history"] = fetch_account_years(fetcher, org)
     bulk_meta = {"sha256": ctx["bulk_meta"].get("sha256"), "retrieved_at": ctx["bulk_meta"].get("loaded_at"), "source_url": ctx["bulk_meta"].get("source_url")}
-    profile = build_profile(org, bulk_entity, bulk_meta, registry, website, jobs, run["started_at"], wikidata=ctx["wikidata"].get(org), wikidata_status=ctx["wikidata_status"], reviews=reviews_result)
+    profile = build_profile(org, bulk_entity, bulk_meta, registry, website, jobs, run["started_at"], wikidata=ctx["wikidata"].get(org), wikidata_status=ctx["wikidata_status"], reviews=reviews_result, workforce=workforce_result)
     profile = apply_refresh(profile, previous, run["run_id"], run["started_at"])
     profile["synthesis"] = synthesize(profile, profile["changes"])
     completed = utc_now()
@@ -267,6 +283,9 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
     for family, module in FAMILY_TO_MODULE.items():
         availability = families[family]["availability"]
         modules[module] = {"state": STARTER_STATE[availability], "availability": availability, "retry_count": 0, "final_timestamp": completed}
+    if "workforce" in families:
+        availability = families["workforce"]["availability"]
+        modules["annual_report"] = {"state": STARTER_STATE[availability], "availability": availability, "retry_count": 0, "final_timestamp": completed}
     terminal_failed = families["legal_identity"]["availability"] == "failed"
     envelope = {
         "organisation_number": org,
@@ -361,11 +380,13 @@ def main(argv: list[str] | None = None) -> int:
             nav_ready.set()
 
     threading.Thread(target=build_nav, daemon=True).start()
+    ocr = ocr_available()
+    print(f"[signalpost] annual-report OCR: {ocr}", file=sys.stderr)
     wikidata, wikidata_status = wikidata_lookup(fetcher, orgs)
     print(f"[signalpost] wikidata matched {len(wikidata)} companies ({wikidata_status['status']})", file=sys.stderr)
     run = {"run_id": run_id, "started_at": started_at}
     ctx = {
-        "fetcher": fetcher, "plan": plan, "run": run, "wikidata": wikidata, "wikidata_status": wikidata_status, "bulk": bulk, "bulk_meta": bulk_meta, "nav": nav, "nav_ready": nav_ready,
+        "fetcher": fetcher, "plan": plan, "run": run, "ocr": ocr, "wikidata": wikidata, "wikidata_status": wikidata_status, "bulk": bulk, "bulk_meta": bulk_meta, "nav": nav, "nav_ready": nav_ready,
         "previous": load_previous_jsonl(Path(args.previous)) if args.previous else {}, "state_dir": state_dir / "snapshots",
     }
     results: dict[str, dict[str, Any]] = {}
@@ -427,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
         "registry_snapshot": {key: bulk_meta.get(key) for key in ("source", "sha256", "rows_scanned", "matched", "seconds")},
         "operations": {**fetcher.report(), "third_party_cost_usd": 0.0, "llm_calls": 0},
         "wikidata": {**wikidata_status, "matched": len(wikidata)},
+        "annual_report_ocr": {"enabled": ocr[0], "detail": ocr[1]},
         "jobs_feed": {"status": nav.status, "error": nav.error, "pages_read": nav.pages_read, "items_indexed": len(nav.items), "window": {"from": nav.oldest_covered, "to": nav.newest_covered}},
         "family_availability": family_counts,
         "companies_with_verified_website": sum(1 for env in envelopes if env["families"].get("official_website", {}).get("availability") == "available"),

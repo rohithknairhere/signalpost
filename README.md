@@ -22,6 +22,8 @@ uv run python scripts/run_competition_batch.py --organisations batch.jsonl --bul
   --run-id official-001 --expected-count 100
 ```
 
+Optional, for workforce facts from scanned annual reports: `apt-get install poppler-utils tesseract-ocr` (or `brew install poppler tesseract`). Everything else works without them.
+
 Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/signalpost ...`. Python 3.10 or later is required. The only dependencies are `beautifulsoup4` and `lxml`, pinned in `uv.lock`.
 
 | Flag | Default | Purpose |
@@ -38,7 +40,7 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 - **Models:** none. Synthesis is deterministic and evidence-bound, with no LLM calls.
 - **Expected external API cost per official run:** **$0.00**. All sources are free public APIs or public web pages.
 - **Requests:** about 11–15 per company (≈1,100–1,500 for a 100-company batch, including the shared NAV feed). The agent plans its budget from the batch size and never exceeds `--max-requests`.
-- **Runtime:** about 5 minutes for 100 companies on a normal connection.
+- **Runtime:** about 5 minutes for 100 companies, or about 12–15 minutes with annual-report OCR enabled (well inside the 45-minute limit; OCR stops early when the time budget runs low).
 - **Code licence:** MIT.
 
 ## Sources and rights
@@ -48,6 +50,7 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 | Brønnøysundregistrene, Enhetsregisteret (bulk + API) | Identity, status, industry, addresses, employees, roles, registered workplaces | NLOD 2.0 open data |
 | Regnskapsregisteret API + filing-copy list | Filed annual accounts (as filed, never estimated), history, PDF links | NLOD 2.0. The copy-year endpoint is paced at ≤30/min |
 | NAV `pam-stilling-feed` (public token) | Active job postings, confirmed by employer organisation number | [NAV API terms](https://arbeidsplassen.nav.no/vilkar-api). Inactive ads are never published |
+| Regnskapsregisteret filing copies (PDF) | Workforce (full-time equivalents / average employees) as stated in the latest filed annual accounts, read with OCR | NLOD 2.0. Same ≤30/min pacing. Needs the optional `pdftoppm` + `tesseract` tools; skipped (and reported) when absent |
 | Fagfolkguiden (`/bedrift/<slug>-<orgnr>`) | Customer rating and count, keyed by organisation number and checked against the profile's schema.org identifier | Public pages, `/bedrift/` allowed by robots.txt. Skipped where ratings do not apply (holding, finance, property, housing co-ops) |
 | Wikidata SPARQL (one query per batch) | Items whose Norwegian org. number (P2333) equals ours: website, profiles, LEI, Wikipedia | CC0 |
 | Company websites | Verified official site: self-description, contact, profiles, careers, dated news | Public pages. `robots.txt` honoured, identified user agent, per-host pacing |
@@ -61,8 +64,9 @@ It is better to miss a fact than to attach it to the wrong company, so:
 1. **The organisation number is the anchor.** Registry, accounts, roles and workplaces come from endpoints keyed by the number.
 2. **A website is published only when it proves its own identity:** the organisation number on the site (including in script data for JavaScript-built sites), or the exact legal name with a domain that matches the name. A registry-declared site may also be verified by all of its registry contact details (phone, e-mail and address). A shared phone or address on its own only proves co-location (accountants, housing managers, franchise chains), so it never verifies a site. Housing-manager and directory domains never verify a member company. A site showing **another** company's number and not ours is rejected, unless a registry lookup shows that number belongs to a web agency, IT or accounting firm with an unrelated name (footer credits). Redirects to an unrelated domain (franchise pages) and parked domains are rejected. Uncertain candidates are returned as `ambiguous` with the evidence for and against.
 3. **Profiles** are published only from the verified site, and only when they are declared in structured data or named like the company, its domain or its brand. Owners' personal accounts and "designed by" vendor links are quarantined.
-4. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces).
-5. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
+4. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces). Open positions the verified website itself publishes as schema.org `JobPosting` are added as company-owned evidence.
+5. **Workforce** is published only when the filed annual report states it explicitly; the claim quotes the OCR'd sentence and page.
+6. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
 
 ## Output contract
 
@@ -83,7 +87,7 @@ Every input gets exactly one envelope with `terminal_status` (`completed`/`faile
 }
 ```
 
-Families: `legal_identity`, `public_brand`, `annual_accounts`, `account_history`, `leadership`, `registered_workplaces`, `official_website`, `company_profiles`, `website_contact`, `hiring`, `public_activity`, `ratings_reviews`.
+Families: `legal_identity`, `public_brand`, `annual_accounts`, `account_history`, `leadership`, `registered_workplaces`, `official_website`, `company_profiles`, `website_contact`, `hiring`, `public_activity`, `ratings_reviews`, plus `workforce` when OCR tools are installed.
 
 ## Refresh
 

@@ -1,9 +1,9 @@
 {
   "agent": "signalpost-agent/1.0.0",
   "run_id": "smoke-100",
-  "started_at": "2026-10-16T13:35:19Z",
-  "completed_at": "2026-10-16T13:40:31Z",
-  "runtime_seconds": 312.3,
+  "started_at": "2026-10-16T17:17:02Z",
+  "completed_at": "2026-10-16T17:25:51Z",
+  "runtime_seconds": 528.5,
   "expected_count": 100,
   "input_count": 100,
   "emitted_envelopes": 100,
@@ -17,7 +17,7 @@
       "financials"
     ],
     "candidates": 4,
-    "pages": 7,
+    "pages": 9,
     "nav_pages": 200,
     "allowance": 16.7
   },
@@ -29,24 +29,25 @@
     "seconds": null
   },
   "operations": {
-    "requests": 1616,
+    "requests": 1708,
     "request_budget": 1900,
     "requests_by_module": {
+      "annual_report": 100,
       "dns": 465,
       "financial_history": 100,
       "financials": 100,
       "jobs_nav": 153,
       "locations": 100,
       "registry_live": 100,
-      "reviews": 67,
+      "reviews": 61,
       "roles": 100,
-      "website": 429,
+      "website": 426,
       "website_identity": 1,
-      "wikidata": 1
+      "wikidata": 2
     },
-    "bytes": 97604082,
-    "p50_ms": 634,
-    "p95_ms": 5599,
+    "bytes": 124861105,
+    "p50_ms": 641,
+    "p95_ms": 3898,
     "third_party_cost_usd": 0.0,
     "llm_calls": 0
   },
@@ -56,14 +57,18 @@
     "error": null,
     "matched": 1
   },
+  "annual_report_ocr": {
+    "enabled": true,
+    "detail": "eng"
+  },
   "jobs_feed": {
     "status": "available",
     "error": null,
     "pages_read": 152,
-    "items_indexed": 43508,
+    "items_indexed": 43574,
     "window": {
-      "from": "2026-08-02T16:16:23.353847+02:00",
-      "to": "2026-10-16T15:36:31.494837+02:00"
+      "from": "2026-08-02T21:19:32.966007+02:00",
+      "to": "2026-10-16T19:02:02.112382+02:00"
     }
   },
   "family_availability": {
@@ -115,6 +120,9 @@
       "not_available": 48,
       "not_applicable": 42,
       "available": 10
+    },
+    "workforce": {
+      "available": 100
     },
     "public_activity": {
       "available": 100

@@ -108,7 +108,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px}
 <script id="data" type="application/json">__DATA__</script>
 <script>
 const DATA=JSON.parse(document.getElementById('data').textContent);const C=DATA.companies;
-const FAM={legal_identity:'Legal identity',public_brand:'Public brand',annual_accounts:'Annual accounts',account_history:'Account history',leadership:'Leadership',registered_workplaces:'Workplaces',official_website:'Website',company_profiles:'Profiles',website_contact:'Contact',hiring:'Hiring',public_activity:'Activity',ratings_reviews:'Ratings'};
+const FAM={legal_identity:'Legal identity',public_brand:'Public brand',annual_accounts:'Annual accounts',account_history:'Account history',leadership:'Leadership',registered_workplaces:'Workplaces',official_website:'Website',company_profiles:'Profiles',website_contact:'Contact',hiring:'Hiring',public_activity:'Activity',ratings_reviews:'Ratings',workforce:'Workforce'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sel=new Set();let current=null;
 document.getElementById('meta').textContent=`Run ${DATA.meta.run_id} · ${DATA.meta.input_count} companies · completed ${DATA.meta.completed_at} · ${DATA.meta.requests} requests · ${DATA.meta.agent}`;

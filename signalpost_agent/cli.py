@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ STARTER_STATE = {"available": "complete", "not_available": "not_found", "blocked
 FAMILY_TO_MODULE = {
     "legal_identity": "registry_live", "annual_accounts": "financials", "account_history": "financial_history",
     "leadership": "roles", "registered_workplaces": "locations", "official_website": "website",
-    "company_profiles": "social_profiles", "hiring": "jobs", "public_activity": "activity", "ratings_reviews": "reviews",
+    "company_profiles": "social_profiles", "hiring": "jobs", "public_activity": "activity",
 }
 
 
@@ -70,14 +70,34 @@ def read_inputs(path: Path) -> list[str]:
     return orgs
 
 
-def plan_for(n: int, max_requests: int) -> dict[str, Any]:
+def plan_for(n: int, max_requests: int, *, has_bulk: bool = False, time_budget_s: float = 1500) -> dict[str, Any]:
+    """Spend the request and time budget where it buys the most verified facts.
+
+    Core official data (accounts, roles, workplaces) comes first; the live entity
+    record is skipped when the bulk snapshot already supplies identity and the
+    budget is tight; website depth, ratings and OCR shrink before anything core.
+    """
+    n = max(n, 1)
     nav_pages = 200 if n <= 200 else 80 if n <= 600 else 30
-    allowance = (max_requests - nav_pages - 30) / max(n, 1)
+    allowance = (max_requests - nav_pages - 30) / n
+    live = [] if has_bulk and allowance < 12 else ["registry_live"]
     if allowance >= 12:
-        return {"tier": "full", "years": n <= 400, "registry": ["registry_live", "roles", "locations", "financials"], "candidates": 4, "pages": 9, "nav_pages": nav_pages, "allowance": round(allowance, 1)}
-    if allowance >= 6:
-        return {"tier": "reduced", "years": False, "registry": ["registry_live", "roles", "locations", "financials"], "candidates": 1, "pages": 3, "nav_pages": nav_pages, "allowance": round(allowance, 1)}
-    return {"tier": "minimal", "years": False, "registry": ["roles", "financials"], "candidates": 1, "pages": 2, "nav_pages": min(nav_pages, 30), "allowance": round(allowance, 1)}
+        plan = {"tier": "full", "registry": live + ["roles", "locations", "financials"], "candidates": 4, "pages": 9, "reviews": True}
+    elif allowance >= 7:
+        plan = {"tier": "reduced", "registry": live + ["roles", "locations", "financials"], "candidates": 2, "pages": 4, "reviews": True}
+    elif allowance >= 3.5:
+        plan = {"tier": "lean", "registry": live + ["financials", "roles", "locations"], "candidates": 1, "pages": 2, "reviews": False}
+    else:
+        nav_pages = min(nav_pages, 20)
+        allowance = (max_requests - nav_pages - 30) / n
+        priority = ([] if has_bulk else ["registry_live"]) + ["financials", "roles", "locations"]
+        plan = {"tier": "minimal", "registry": priority[: max(1, int(allowance))], "candidates": 0, "pages": 0, "reviews": False}
+    # The filing-copy endpoints allow ~30 requests/minute; keep them inside a third of the time budget.
+    paced_slots = int(time_budget_s / 3 / 2.2)
+    plan["years"] = plan["tier"] in {"full", "reduced"} and 2 * n <= paced_slots
+    plan["ocr_limit"] = max(0, min(n, paced_slots - (n if plan["years"] else 0))) if plan["tier"] != "minimal" else 0
+    plan.update(nav_pages=nav_pages, allowance=round(allowance, 1))
+    return plan
 
 
 def website_candidates(entity: dict[str, Any], tier: str, wikidata_entry: dict[str, Any] | None = None, subunit_names: list[str] | None = None) -> list[tuple[str, str]]:
@@ -173,13 +193,15 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
     run = ctx["run"]
     started = time.monotonic()
     used_before = fetcher.used
+    ctx["start_company"]()
     errors: list[dict[str, Any]] = []
     bulk_entity = ctx["bulk"].get(org)
     registry: dict[str, Any] = {}
     try:
-        registry = fetch_registry(fetcher, org, want_years=False) if len(org) == 9 else {}
-        if plan["registry"] != ["registry_live", "roles", "locations", "financials"]:
-            registry = {key: value for key, value in registry.items() if key in plan["registry"] or key == "financial_history"}
+        modules = list(plan["registry"])
+        if bulk_entity is None and "registry_live" not in modules:
+            modules.insert(0, "registry_live")  # not in the bulk snapshot: identity must come from the live record
+        registry = fetch_registry(fetcher, org, want_years=False, modules=modules) if len(org) == 9 else {}
     except Exception as exc:
         errors.append({"stage": "registry", "error": f"{type(exc).__name__}: {exc}"})
     live = registry.get("registry_live") or {}
@@ -200,6 +222,8 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
         if previous_site and normalize_url(previous_site):
             # Re-check the site verified last run first, so refreshes stay stable.
             candidates = [(normalize_url(previous_site), "previous_verified")] + [item for item in candidates if item[0] != normalize_url(previous_site)]
+        if plan["candidates"] <= 0:
+            candidates = []
         try:
             website = research_website(fetcher, identity, candidates, max_candidates=plan["candidates"], max_pages=plan["pages"])
         except BudgetExhausted as exc:
@@ -231,9 +255,13 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
             if homepage and job.get("matched_via") == "organisation" and homepage not in tried:
                 parsed = homepage.split("/")
                 homepages.append(("/".join(parsed[:3]) + "/", "nav_employer_homepage"))
+            if job.get("matched_via") == "organisation":
+                for domain in job.get("contact_email_domains") or []:
+                    if email_domain("x@" + domain) and normalize_url(domain) not in tried:
+                        homepages.append((f"https://{domain}/", "nav_employer_homepage"))
         if homepages:
             try:
-                second = research_website(fetcher, build_identity(org, entity, subunits), list(dict.fromkeys(homepages))[:1], max_candidates=1, max_pages=plan["pages"])
+                second = research_website(fetcher, build_identity(org, entity, subunits), list(dict.fromkeys(homepages))[:2], max_candidates=2, max_pages=plan["pages"])
                 if second.get("verdict") == "exact" or not website:
                     second["attempts"] = (website or {}).get("attempts", []) + second.get("attempts", [])
                     website = second
@@ -247,6 +275,8 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
         ok, reason = reviews_applies(entity)
         if not ok:
             reviews_result = {"status": "not_applicable", "reason": reason}
+        elif not plan["reviews"]:
+            reviews_result = None
         elif fetcher.can_spend(1, reserve=40):
             try:
                 reviews_result = fetch_rating(fetcher, org, entity.get("navn") or org)
@@ -258,17 +288,20 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
 
     workforce_result: dict[str, Any] | None = None
     ocr_ok, ocr_lang = ctx["ocr"]
-    if ocr_ok and entity and len(org) == 9:
+    if ocr_ok and entity and len(org) == 9 and org in ctx["ocr_orgs"]:
         year = str(entity.get("sisteInnsendteAarsregnskap") or "")
         form = str((entity.get("organisasjonsform") or {}).get("kode") or "")
         if not year.isdigit():
             workforce_result = {"status": "not_applicable" if form not in ALWAYS_FILE else "not_available", "reason": "no filed annual accounts registered"}
         else:
-            try:
-                workforce_result = read_workforce(fetcher, org, year, language=ocr_lang)
-            except Exception as exc:
-                errors.append({"stage": "annual_report", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
-                workforce_result = {"status": "failed", "error": type(exc).__name__}
+            if not fetcher.can_spend(1):
+                workforce_result = {"status": "failed", "error": "request budget reserved for core official records"}
+            else:
+                try:
+                    workforce_result = read_workforce(fetcher, org, year, language=ocr_lang)
+                except Exception as exc:
+                    errors.append({"stage": "annual_report", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+                    workforce_result = {"status": "failed", "error": type(exc).__name__}
 
     if plan["years"] and len(org) == 9 and fetcher.seconds_left() > 120:
         # Rate-limited endpoint (~30/min): read last so it never delays the other sources.
@@ -283,9 +316,10 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
     for family, module in FAMILY_TO_MODULE.items():
         availability = families[family]["availability"]
         modules[module] = {"state": STARTER_STATE[availability], "availability": availability, "retry_count": 0, "final_timestamp": completed}
-    if "workforce" in families:
-        availability = families["workforce"]["availability"]
-        modules["annual_report"] = {"state": STARTER_STATE[availability], "availability": availability, "retry_count": 0, "final_timestamp": completed}
+    for optional, module in (("workforce", "annual_report"), ("ratings_reviews", "reviews")):
+        if optional in families:
+            availability = families[optional]["availability"]
+            modules[module] = {"state": STARTER_STATE[availability], "availability": availability, "retry_count": 0, "final_timestamp": completed}
     terminal_failed = families["legal_identity"]["availability"] == "failed"
     envelope = {
         "organisation_number": org,
@@ -336,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--previous", help="previous envelopes JSONL to refresh against (optional; --state-dir is used otherwise)")
     parser.add_argument("--state-dir", default="state", help="where snapshots and caches persist between runs")
     parser.add_argument("--max-requests", type=int, default=int(os.environ.get("SIGNALPOST_MAX_REQUESTS", 1900)))
-    parser.add_argument("--time-budget-minutes", type=float, default=float(os.environ.get("SIGNALPOST_TIME_BUDGET_MINUTES", 40)))
+    parser.add_argument("--time-budget-minutes", type=float, default=float(os.environ.get("SIGNALPOST_TIME_BUDGET_MINUTES", 25)))
     parser.add_argument("--workers", type=int, default=12)
     parser.add_argument("--viewer", default=None, help="write the static viewer here (default: <output dir>/site/index.html)")
     parser.add_argument("--no-viewer", action="store_true")
@@ -362,10 +396,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     deadline = wall_start + args.time_budget_minutes * 60
     fetcher = Fetcher(max_requests=args.max_requests, deadline_monotonic=deadline)
-    plan = plan_for(len(orgs), args.max_requests)
-    print(f"[signalpost] {len(orgs)} companies, plan={plan}", file=sys.stderr)
-
     bulk, bulk_meta = load_bulk(args.bulk, orgs)
+    plan = plan_for(len(orgs), args.max_requests, has_bulk=len(bulk) >= 0.9 * len(orgs), time_budget_s=args.time_budget_minutes * 60)
+    print(f"[signalpost] {len(orgs)} companies, plan={plan}", file=sys.stderr)
     bulk_meta["loaded_at"] = utc_now()
     bulk_meta["source_url"] = "https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv"
     print(f"[signalpost] bulk snapshot matched {len(bulk)}/{len(orgs)} in {bulk_meta.get('seconds')}s", file=sys.stderr)
@@ -381,18 +414,40 @@ def main(argv: list[str] | None = None) -> int:
 
     threading.Thread(target=build_nav, daemon=True).start()
     ocr = ocr_available()
-    print(f"[signalpost] annual-report OCR: {ocr}", file=sys.stderr)
+    # When time allows OCR for only part of a large batch, read the reports of the largest employers first.
+    def _size(org: str) -> int:
+        try:
+            return int((bulk.get(org) or {}).get("antallAnsatte") or 0)
+        except (TypeError, ValueError):
+            return 0
+    ocr_orgs = set(sorted(orgs, key=_size, reverse=True)[: plan["ocr_limit"]])
+    print(f"[signalpost] annual-report OCR: {ocr}, up to {len(ocr_orgs)} reports", file=sys.stderr)
     wikidata, wikidata_status = wikidata_lookup(fetcher, orgs)
     print(f"[signalpost] wikidata matched {len(wikidata)} companies ({wikidata_status['status']})", file=sys.stderr)
     run = {"run_id": run_id, "started_at": started_at}
     ctx = {
-        "fetcher": fetcher, "plan": plan, "run": run, "ocr": ocr, "wikidata": wikidata, "wikidata_status": wikidata_status, "bulk": bulk, "bulk_meta": bulk_meta, "nav": nav, "nav_ready": nav_ready,
+        "fetcher": fetcher, "plan": plan, "run": run, "ocr": ocr, "ocr_orgs": ocr_orgs, "wikidata": wikidata, "wikidata_status": wikidata_status, "bulk": bulk, "bulk_meta": bulk_meta, "nav": nav, "nav_ready": nav_ready,
         "previous": load_previous_jsonl(Path(args.previous)) if args.previous else {}, "state_dir": state_dir / "snapshots",
     }
     results: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        futures = {pool.submit(research_company, org, ctx): org for org in orgs}
-        for index, future in enumerate(as_completed(futures), 1):
+    pending = {"count": len(orgs)}
+    pending_lock = threading.Lock()
+
+    def start_company() -> None:
+        with pending_lock:
+            pending["count"] -= 1
+
+    core_cost = len(plan["registry"])
+    # Optional work (websites, ratings, OCR, job details) never eats into the requests that
+    # companies not yet started need for their core official records.
+    fetcher.reserve_fn = lambda: int(pending["count"] * core_cost * 1.05) + 10
+    ctx["start_company"] = start_company
+    pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
+    futures = {pool.submit(research_company, org, ctx): org for org in orgs}
+    timed_out = False
+    try:
+        # Hard stop a minute after the budget: every company still gets a terminal envelope.
+        for index, future in enumerate(as_completed(futures, timeout=max(30.0, deadline - time.monotonic() + 60)), 1):
             org = futures[future]
             try:
                 results[org] = future.result()
@@ -402,9 +457,13 @@ def main(argv: list[str] | None = None) -> int:
             if index % args.checkpoint_every == 0:
                 print(f"[signalpost] {index}/{len(orgs)} done, {fetcher.used} requests, {int(time.monotonic() - wall_start)}s", file=sys.stderr)
                 write_jsonl(output.with_suffix(".partial.jsonl"), [results[o] for o in orgs if o in results])
+    except FuturesTimeout:
+        timed_out = True
+        print("[signalpost] time budget reached; unfinished companies are reported as failed", file=sys.stderr)
+    pool.shutdown(wait=not timed_out, cancel_futures=True)
 
     completed_at = utc_now()
-    envelopes = [results.get(org) or failed_envelope(org, run, "missing result") for org in orgs]
+    envelopes = [results.get(org) or failed_envelope(org, run, "time budget reached before this company finished" if timed_out else "missing result") for org in orgs]
     for envelope in envelopes:
         envelope["run"]["batch_completed_at"] = completed_at
     write_jsonl(output, envelopes)
@@ -469,7 +528,13 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # the viewer never blocks the data contract
             print(f"[signalpost] viewer not written: {exc}", file=sys.stderr)
     print(json.dumps({key: report[key] for key in ("run_id", "input_count", "emitted_envelopes", "runtime_seconds", "operations", "companies_with_verified_website", "companies_with_job_postings", "validation")}, indent=2))
-    return 0 if validation["passed"] else 1
+    code = 0 if validation["passed"] else 1
+    if timed_out:
+        # Worker threads may still be blocked on slow sites; all outputs are written, so exit now.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+    return code
 
 
 if __name__ == "__main__":

@@ -192,9 +192,10 @@ class NavJobIndex:
         if self.status not in {"available"}:
             return {"status": "failed" if self.status == "failed" else self.status, "error": self.error, "jobs": [], "checked": 0}
         uuids = self.candidates(names)
-        jobs, rejected, checked = [], 0, 0
+        jobs, rejected, checked, skipped = [], 0, 0, 0
         for uuid in uuids[:max_details]:
             if not self.fetcher.can_spend(1, reserve=10):
+                skipped = len(uuids[:max_details]) - checked
                 break
             try:
                 body, meta = self.entry(uuid)
@@ -220,6 +221,7 @@ class NavJobIndex:
                 "employer_name": employer.get("name"),
                 "employer_orgnr": employer_org,
                 "employer_homepage": employer.get("homepage"),
+                "contact_email_domains": sorted({str(c.get("email") or "").rsplit("@", 1)[-1].lower() for c in ad.get("contactList") or [] if "@" in str(c.get("email") or "")}),
                 "matched_via": "organisation" if employer_org == org else "registered_workplace",
                 "published": str(ad.get("published") or "")[:10] or None,
                 "expires": expires or None,
@@ -234,6 +236,8 @@ class NavJobIndex:
                 "sha256": meta["sha256"],
             })
         jobs.sort(key=lambda job: job.get("published") or "", reverse=True)
+        if not jobs and skipped:
+            return {"status": "failed", "error": f"{skipped} name-matched ads not checked (request budget)", "jobs": [], "checked": checked}
         return {
             "status": "available" if jobs else "not_available",
             "jobs": jobs,

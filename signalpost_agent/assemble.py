@@ -24,11 +24,10 @@ FAMILIES = {
     "website_contact": "Contact details published by the company",
     "hiring": "Hiring (job postings)",
     "public_activity": "Dated public activity",
-    "ratings_reviews": "Customer ratings and reviews",
 }
 
 # Families that exist only when their module ran (e.g. OCR tools installed).
-OPTIONAL_FAMILIES = {"workforce": "Workforce (annual report)"}
+OPTIONAL_FAMILIES = {"workforce": "Workforce (annual report)", "ratings_reviews": "Customer ratings and reviews"}
 
 ROLE_PRIORITY = {"DAGL": 0, "LEDE": 1, "NEST": 2, "KOMP": 3, "INNH": 3, "DTPR": 3, "DTSO": 3, "BEST": 4, "MEDL": 5, "VARA": 7, "OBS": 8, "REVI": 9, "REGN": 10, "KONT": 11, "FFØR": 12}
 
@@ -96,7 +95,7 @@ def _meta_ok(module: dict[str, Any] | None) -> bool:
 def _meta_state(module: dict[str, Any] | None) -> tuple[str, str]:
     """Map a failed/empty registry fetch to an honest availability state."""
     if not module:
-        return "failed", "source not fetched"
+        return "failed", "not fetched in this run: the request budget for a batch of this size was spent on other official sources first"
     meta = module["meta"]
     status = meta.get("status")
     if meta.get("budget"):
@@ -300,6 +299,7 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
         contact_ev = b.add_evidence(contact_page.get("url") or home.get("url"), "company_owned_website", contact_page.get("retrieved_at"), contact_page.get("sha256"), span="contact details on the verified website")
         b.claim("website_contact", "website_emails", extracted.get("emails"), [contact_ev], confidence=0.95)
         b.claim("website_contact", "website_phones", ["+47 " + phone for phone in extracted.get("phones") or []], [contact_ev], confidence=0.9)
+        b.claim("website_contact", "website_addresses", extracted.get("addresses") or None, [contact_ev], confidence=0.85)
         site_jobs = extracted.get("job_postings") or []
         if site_jobs:
             job_evs = sorted({b.add_evidence(job["found_on"], "company_owned_website", job.get("retrieved_at"), job.get("sha256"), span=f"schema.org JobPosting: {job['title']}") for job in site_jobs})
@@ -380,7 +380,7 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
     # ---------------- ratings and reviews (Fagfolkguiden, keyed by organisation number)
     review_events: list[tuple[str, str, str]] = []
     if reviews is None:
-        b.family("ratings_reviews", "failed", "ratings source not checked this run")
+        pass  # not attempted in this run (request plan); the family is omitted rather than reported as failed
     elif reviews.get("status") == "available":
         rev_ev = b.add_evidence(reviews["url"], "third_party_directory_fagfolkguiden", reviews.get("retrieved_at"), reviews.get("sha256"), span=f"Fagfolkguiden profile declaring organisation number {org}")
         b.claim("ratings_reviews", "directory_listing", reviews["url"], [rev_ev], confidence=0.98, method="org_number_in_structured_data")

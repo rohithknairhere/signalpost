@@ -1,15 +1,14 @@
 {
   "agent": "signalpost-agent/1.0.0",
   "run_id": "smoke-100-refresh",
-  "started_at": "2026-10-16T17:25:51Z",
-  "completed_at": "2026-10-16T17:34:16Z",
-  "runtime_seconds": 504.5,
+  "started_at": "2026-10-17T05:58:53Z",
+  "completed_at": "2026-10-17T06:06:21Z",
+  "runtime_seconds": 449.0,
   "expected_count": 100,
   "input_count": 100,
   "emitted_envelopes": 100,
   "plan": {
     "tier": "full",
-    "years": true,
     "registry": [
       "registry_live",
       "roles",
@@ -18,6 +17,9 @@
     ],
     "candidates": 4,
     "pages": 9,
+    "reviews": true,
+    "years": true,
+    "ocr_limit": 100,
     "nav_pages": 200,
     "allowance": 16.7
   },
@@ -29,25 +31,25 @@
     "seconds": null
   },
   "operations": {
-    "requests": 1542,
+    "requests": 1526,
     "request_budget": 1900,
     "requests_by_module": {
       "annual_report": 100,
-      "dns": 463,
+      "dns": 464,
       "financial_history": 100,
       "financials": 100,
       "jobs_nav": 2,
       "locations": 100,
       "registry_live": 100,
-      "reviews": 60,
+      "reviews": 59,
       "roles": 100,
-      "website": 415,
+      "website": 399,
       "website_identity": 1,
       "wikidata": 1
     },
-    "bytes": 50436667,
-    "p50_ms": 647,
-    "p95_ms": 7108,
+    "bytes": 51552796,
+    "p50_ms": 633,
+    "p95_ms": 3711,
     "third_party_cost_usd": 0.0,
     "llm_calls": 0
   },
@@ -65,10 +67,10 @@
     "status": "available",
     "error": null,
     "pages_read": 1,
-    "items_indexed": 43574,
+    "items_indexed": 42725,
     "window": {
-      "from": "2026-08-02T21:19:32.966007+02:00",
-      "to": "2026-10-16T19:02:02.112382+02:00"
+      "from": "2026-08-03T08:03:40.953563+02:00",
+      "to": "2026-10-17T06:00:53.837437+02:00"
     }
   },
   "family_availability": {
@@ -89,28 +91,28 @@
       "not_available": 27
     },
     "official_website": {
-      "blocked": 1,
+      "blocked": 2,
       "not_available": 70,
       "available": 7,
-      "ambiguous": 22
-    },
-    "public_brand": {
-      "blocked": 1,
-      "not_available": 70,
-      "available": 8,
       "ambiguous": 21
     },
+    "public_brand": {
+      "blocked": 2,
+      "not_available": 70,
+      "available": 8,
+      "ambiguous": 20
+    },
     "company_profiles": {
-      "blocked": 1,
+      "blocked": 2,
       "not_available": 75,
-      "ambiguous": 22,
+      "ambiguous": 21,
       "available": 2
     },
     "website_contact": {
-      "blocked": 1,
-      "not_available": 71,
-      "available": 6,
-      "ambiguous": 22
+      "blocked": 2,
+      "not_available": 70,
+      "available": 7,
+      "ambiguous": 21
     },
     "hiring": {
       "not_available": 99,

@@ -170,15 +170,16 @@ def fetch_json(fetcher: Fetcher, url: str, module: str) -> tuple[Response, Any]:
     return response, body
 
 
-def fetch_registry(fetcher: Fetcher, org: str, *, want_years: bool = True) -> dict[str, Any]:
+def fetch_registry(fetcher: Fetcher, org: str, *, want_years: bool = True, modules: list[str] | None = None) -> dict[str, Any]:
     """Fetch live registry modules. Returns {module: {"response": meta, "body": parsed}}."""
     out: dict[str, Any] = {}
-    plan = [
-        ("registry_live", ENTITY.format(org=org)),
-        ("roles", ROLES.format(org=org)),
-        ("locations", SUBUNITS.format(org=org)),
-        ("financials", ACCOUNTS.format(org=org)),
-    ]
+    urls = {
+        "registry_live": ENTITY.format(org=org),
+        "roles": ROLES.format(org=org),
+        "locations": SUBUNITS.format(org=org),
+        "financials": ACCOUNTS.format(org=org),
+    }
+    plan = [(module, urls[module]) for module in (modules or ["registry_live", "roles", "locations", "financials"]) if module in urls]
     if want_years:
         plan.append(("financial_history", ACCOUNT_YEARS.format(org=org)))
     for module, url in plan:

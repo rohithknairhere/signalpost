@@ -721,6 +721,7 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
     contact_text = " ".join(page.text for page in contact_pages)
     site_emails = sorted({email.lower() for email in EMAIL_RE.findall(contact_text) if registered_domain(email.split("@")[1]) == domain or email.lower() in identity.emails})[:5]
     site_phones = sorted(_phones(contact_text))[:5]
+    site_addresses = extract_addresses(contact_text)
     brand = clean_text(home.meta.get("og:site_name"), 120)
     description = clean_text(home.meta.get("description") or home.meta.get("og:description"), 600)
     for node in jsonld_orgs:
@@ -746,12 +747,32 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         "social_profiles": profiles,
         "emails": site_emails,
         "phones": site_phones,
+        "addresses": site_addresses,
         "careers_page": {"url": careers.url, "title": careers.title, "retrieved_at": careers.retrieved_at, "sha256": careers.sha256} if careers else None,
         "news": news,
         "job_postings": job_postings,
         "jsonld_founding_date": founding,
         "language": (home.soup.html.get("lang") if home.soup is not None and home.soup.html else None),
     }
+
+
+ADDRESS_RE = re.compile(r"([A-ZÆØÅ][A-Za-zÆØÅæøåéü.\-]+(?: [A-Za-zÆØÅæøåéü.\-]+){0,3} \d{1,4}[A-Za-z]?),? (\d{4}) ([A-ZÆØÅ][A-Za-zÆØÅæøå\-]+(?: [A-ZÆØÅ][A-Za-zÆØÅæøå\-]+)?)")
+ADDRESS_NOISE = {"postboks", "pb", "boks", "tlf", "telefon", "org", "orgnr", "mva", "copyright"}
+
+
+def extract_addresses(text: str, limit: int = 5) -> list[str]:
+    """Street addresses ('Strandgata 21, 4307 Sandnes') published on the company's contact pages."""
+    found: list[str] = []
+    for street, postcode, place in ADDRESS_RE.findall(text or ""):
+        first = street.split()[0].lower().strip(".")
+        if first in ADDRESS_NOISE or len(street) > 50:
+            continue
+        address = f"{street}, {postcode} {place}"
+        if address not in found:
+            found.append(address)
+        if len(found) >= limit:
+            break
+    return found
 
 
 def extract_job_postings(pages: list[Page], domain: str, limit: int = 15) -> list[dict[str, Any]]:

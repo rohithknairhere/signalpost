@@ -232,3 +232,10 @@ def test_foreign_parent_profile_not_published_for_norwegian_company():
     pages = [page(html), page(html, url="https://sandneselektriske.no/om-oss", kind="about")]
     facts = extract_facts(pages, identity(), "sandneselektriske.no")
     assert not [p for p in facts["social_profiles"] if p["publishable"]]
+
+
+def test_contact_page_addresses():
+    from signalpost_agent.website import extract_addresses
+
+    text = "Kontakt oss: Strandgata 21, 4307 Sandnes. Postboks 32, 4301 Sandnes. Tlf 51 66 00 00"
+    assert extract_addresses(text) == ["Strandgata 21, 4307 Sandnes"]

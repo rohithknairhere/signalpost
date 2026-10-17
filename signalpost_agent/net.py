@@ -163,6 +163,7 @@ class Fetcher:
         self._opener = urllib.request.build_opener(_SafeRedirect())
         self.cache = offline_cache
         self._doh: dict[str, bool] = {}
+        self.reserve_fn = lambda: 0
 
     # ---- budget -------------------------------------------------------
     @property
@@ -176,6 +177,10 @@ class Fetcher:
         return self.deadline - time.monotonic()
 
     def can_spend(self, count: int = 1, reserve: int = 0) -> bool:
+        try:
+            reserve += int(self.reserve_fn())
+        except Exception:
+            pass
         return self.remaining() - reserve >= count and self.seconds_left() > 5
 
     def _reserve(self, module: str) -> None:
@@ -301,6 +306,8 @@ class Fetcher:
             cached = self._doh.get(host)
         if cached is not None:
             return cached
+        if not self.can_spend(1):
+            return False  # never spend reserved core requests on guessed domains
         url = "https://cloudflare-dns.com/dns-query?name=" + urllib.parse.quote(host) + "&type=A"
         response = self.get(url, module="dns", respect_robots=False, accept="application/dns-json", timeout=8)
         answer = False

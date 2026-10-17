@@ -122,9 +122,10 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
     rating = value("customer_rating")
     if rating:
         say(f"Customers rate it {rating['value']}/{rating.get('best', 5)} from {rating['count']} reviews ({rating.get('origin')}).", "customer_rating")
-    latest = value("latest_activity_date")
-    if latest:
-        say(f"Most recent dated public activity: {latest}.", "latest_activity_date", "dated_events")
+    events = value("dated_events") or []
+    if events:
+        recent = "; ".join(f"{event['date']} {event['description'][:70]}" for event in events[:3])
+        sentences.append({"text": f"Most recent dated activity: {recent}.", "evidence_ids": sorted({event["evidence_id"] for event in events[:3]}), "fields": ["dated_events"]})
 
     # Changes
     change_lines = [
@@ -137,9 +138,14 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
         {"family": family, "label": FAMILIES.get(family, OPTIONAL_FAMILIES.get(family, family)), "availability": info["availability"], "reason": info.get("reason")}
         for family, info in families.items() if info["availability"] != "available"
     ]
-    summary = " ".join(sentence["text"] for sentence in sentences)
+    refresh = profile.get("refresh") or {}
     if change_lines:
-        summary += " Since the previous run: " + "; ".join(item["text"] for item in change_lines[:4]) + "."
+        change_text = "Since the previous run: " + "; ".join(item["text"] for item in change_lines[:4]) + "."
+    elif refresh.get("previous_snapshot"):
+        change_text = f"No material changes since the previous run ({refresh.get('previous_snapshot')})."
+    else:
+        change_text = "First observation of this company; changes are tracked from this snapshot."
+    summary = " ".join(sentence["text"] for sentence in sentences) + " " + change_text
     if unknowns:
         summary += " Not established: " + ", ".join(f"{item['label'].lower()} ({item['availability'].replace('_', ' ')})" for item in unknowns[:6]) + "."
-    return {"summary": summary, "sentences": sentences, "changes": change_lines, "unknowns": unknowns, "method": "deterministic_evidence_bound_v1"}
+    return {"summary": summary, "sentences": sentences, "change_status": change_text, "changes": change_lines, "unknowns": unknowns, "method": "deterministic_evidence_bound_v1"}

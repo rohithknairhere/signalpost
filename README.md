@@ -4,6 +4,18 @@ Give it Norwegian organisation numbers. For each one it returns a single **termi
 
 Built for the Builderr **Signalpost** challenge. The repository is a **JBOX** project: the Next.js web app at the root (`app/`, `components/`, `lib/`) was generated with [JBOX](https://jboxai.com) and exported from JBOX to this repository (see the first commits). The Python research agent (`signalpost_agent/`) produces the data the app shows (`public/data/profiles.json`). Every run also writes a zero-dependency static viewer (`out/site/index.html`) of the same profiles.
 
+## See the results
+
+Every run writes a self-contained viewer next to its output: open **`out/site/index.html`** in any browser. You can search, filter, compare companies side by side, and click any citation to see its source. The JBOX web app (`app/`) shows the same profiles. Live demo with 150 real companies: **https://rohithknairhere.github.io/signalpost/**
+
+| Directory | Company profile with cited summary |
+|---|---|
+| ![Directory](docs/screenshots/directory.png) | ![Profile](docs/screenshots/profile.png) |
+| **Numbered sources (URL, retrieval time, SHA-256)** | **Side-by-side comparison** |
+| ![Sources](docs/screenshots/sources.png) | ![Compare](docs/screenshots/compare.png) |
+
+<img src="docs/screenshots/mobile.png" width="260" alt="Mobile profile">
+
 ## One command
 
 ```bash
@@ -30,8 +42,8 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 |---|---|---|
 | `--state-dir` | `state/` | Snapshots for refresh, plus the NAV feed cache |
 | `--previous` | — | Previous envelopes JSONL to refresh against (instead of `--state-dir`) |
-| `--max-requests` | 1900 | Hard cap on outbound HTTP requests (daily limit is 2,000) |
-| `--time-budget-minutes` | 40 | Hard wall-clock budget (daily limit is 45) |
+| `--max-requests` | 1900 | Hard cap on outbound HTTP requests. Requests for core official records are reserved before any optional source |
+| `--time-budget-minutes` | 25 | Hard wall-clock budget. Every company still gets an envelope if it runs out |
 | `--workers` | 12 | Companies researched in parallel |
 | `--expected-count` | — | Fail fast if the input count differs |
 
@@ -39,8 +51,9 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 
 - **Models:** none. Synthesis is deterministic and evidence-bound, with no LLM calls.
 - **Expected external API cost per official run:** **$0.00**. All sources are free public APIs or public web pages.
-- **Requests:** about 11–15 per company (≈1,100–1,500 for a 100-company batch, including the shared NAV feed). The agent plans its budget from the batch size and never exceeds `--max-requests`.
-- **Runtime:** about 5 minutes for 100 companies, or about 12–15 minutes with annual-report OCR enabled (well inside the 45-minute limit; OCR stops early when the time budget runs low).
+- **Requests:** about 12–13 per company at 100 companies (≈1,250 including the shared NAV feed and annual-report copies), always under `--max-requests`. The agent plans its budget from the batch size and never exceeds `--max-requests`.
+- **Runtime:** about 9 minutes for 100 companies with annual-report OCR.
+- **Any batch size, any budget:** the agent plans from the batch size, the request cap and the time budget. Core official records (accounts, people, addresses) come first. Website depth, ratings and OCR shrink before anything core is dropped, and a watchdog guarantees one terminal envelope per company before the deadline. Tested: 100 companies in about 9 minutes, 300, 1,000, and a forced 2-minute budget (all 100 envelopes, completed).
 - **Code licence:** MIT.
 
 ## Sources and rights

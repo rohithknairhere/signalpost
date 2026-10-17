@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[44108,["/signalpost/_next/static/chunks/0waoertmffe~1.js"],"ViewportBoundary"]
+3:I[44108,["/signalpost/_next/static/chunks/0waoertmffe~1.js"],"MetadataBoundary"]
+4:"$Sreact.suspense"
+5:I[67362,["/signalpost/_next/static/chunks/0waoertmffe~1.js"],"IconMark"]
+0:{"rsc":["$","$1","h",{"children":[null,["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"Signalpost — Company intelligence"}],["$","meta","1",{"name":"description","content":"Norwegian company intelligence, with the evidence attached."}],["$","link","2",{"rel":"icon","href":"https://keystone.jboxai.com/project-assets/bvtpbeiegkxcvfpmod0f6yjf/id0k8z9cfjt3uxn1f9ak8kq2/5b2ede2f59b2c81b635fa939f792bf59b281aefefab6f3e2d62e115615357f83/5b2ede2f59b2c81b.svg"}],["$","$L5","3",{}]]}]}]}],null]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"SQGKKnRZLRLDRfk_Uvi0A"}

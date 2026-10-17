@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[67963,["/signalpost/_next/static/chunks/0waoertmffe~1.js","/signalpost/_next/static/chunks/0o8c98j-nznmi.js"],"DataApp"]
+3:I[44108,["/signalpost/_next/static/chunks/0waoertmffe~1.js"],"OutletBoundary"]
+4:"$Sreact.suspense"
+0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"view":"company","org":"988573949"}],[["$","script","script-0",{"src":"/signalpost/_next/static/chunks/0o8c98j-nznmi.js","async":true}]],["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"SQGKKnRZLRLDRfk_Uvi0A"}
+5:null

@@ -68,7 +68,7 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 | Wikidata SPARQL (one query per batch) | Items whose Norwegian org. number (P2333) equals ours: website, profiles, LEI, Wikipedia | CC0 |
 | Company websites | Verified official site: self-description, contact, profiles, careers, dated news | Public pages. `robots.txt` honoured, identified user agent, per-host pacing |
 
-No search-engine scraping, and no LinkedIn, Meta, Google or Indeed crawling. Social profiles come only from links on the verified company website, or from Wikidata matched on the organisation number. Person data stays in the company-role context, and birth dates are never stored. URLs are fetched only when public (SSRF-guarded, re-checked on every redirect). No secrets are needed.
+No search-engine scraping, and no LinkedIn, Meta, Google or Indeed crawling. No keys or accounts are needed. **Politeness:** requests are paced per host, and `robots.txt` is honoured. A "too many requests" (429/503) response puts the host on cooldown, honouring `Retry-After` and otherwise backing off exponentially. Core registry calls wait and retry; optional calls to a cooling host are skipped. The run report counts rate-limited responses per host. Social profiles come only from links on the verified company website, or from Wikidata matched on the organisation number. Person data stays in the company-role context, and birth dates are never stored. URLs are fetched only when public (SSRF-guarded, re-checked on every redirect). No secrets are needed.
 
 ## How accuracy is protected
 
@@ -76,10 +76,15 @@ It is better to miss a fact than to attach it to the wrong company, so:
 
 1. **The organisation number is the anchor.** Registry, accounts, roles and workplaces come from endpoints keyed by the number.
 2. **A website is published only when it proves its own identity:** the organisation number on the site (including in script data for JavaScript-built sites), or the exact legal name with a domain that matches the name. A registry-declared site may also be verified by all of its registry contact details (phone, e-mail and address). A shared phone or address on its own only proves co-location (accountants, housing managers, franchise chains), so it never verifies a site. Housing-manager and directory domains never verify a member company. A site showing **another** company's number and not ours is rejected, unless a registry lookup shows that number belongs to a web agency, IT or accounting firm with an unrelated name (footer credits). Redirects to an unrelated domain (franchise pages) and parked domains are rejected. Uncertain candidates are returned as `ambiguous` with the evidence for and against.
-3. **Profiles** are published only from the verified site, and only when they are declared in structured data or named like the company, its domain or its brand. Owners' personal accounts and "designed by" vendor links are quarantined.
-4. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces). Open positions the verified website itself publishes as schema.org `JobPosting` are added as company-owned evidence.
-5. **Workforce** is published only when the filed annual report states it explicitly; the claim quotes the OCR'd sentence and page.
-6. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
+3. **Own, shared or group site.** Every verified site is classified:
+   - **own:** the organisation number is on it, or the domain carries the company's name.
+   - **shared:** a registry- or e-mail-declared site under another brand, or the Norwegian section of a multinational site (e.g. `example.com/no`).
+   - **group:** it names sister or parent entities, or it is a foreign parent's domain.
+   Group sites are never published. From a shared site we publish only the address: no profiles, news, jobs or careers.
+4. **Profiles** are published only from the company's own site, and only when they are declared in structured data or named like the company, its domain or its brand. A common industry word ("regnskap", "bygg") is not a name match. These are rejected: parent-group handles ("…gruppen", "…group", "-ab", "-gmbh"), owners' personal accounts, and web-agency, theme and "designed by" links.
+5. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces). Open positions the verified website itself publishes as schema.org `JobPosting` are added as company-owned evidence.
+6. **Workforce** is published only when the filed annual report states it explicitly; the claim quotes the OCR'd sentence and page.
+7. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
 
 ## Output contract
 

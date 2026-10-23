@@ -274,7 +274,10 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
         b.claim("official_website", "official_website", website["final_url"], page_evs[:3], confidence=website.get("score", 0.9), method=f"verified:{website.get('source')}")
         b.claim("official_website", "website_domain", website.get("domain"), [site_ev], confidence=website.get("score", 0.9))
         b.claim("official_website", "verification_signals", website.get("signals"), [site_ev], confidence=website.get("score", 0.9))
-        b.family("official_website", "available", f"verified via {', '.join(website.get('signals') or [])}")
+        ownership = website.get("ownership") or "own"
+        b.claim("official_website", "website_ownership", ownership, [site_ev], confidence=website.get("score", 0.9))
+        note = "" if ownership == "own" else " (shared/brand site: only profiles named like the company are taken from it; no news or jobs)"
+        b.family("official_website", "available", f"verified via {', '.join(website.get('signals') or [])}{note}")
         extracted = website.get("extracted") or {}
         if extracted.get("brand_name"):
             b.claim("public_brand", "brand_name", extracted["brand_name"], [site_ev], confidence=0.9)

@@ -164,6 +164,9 @@ class Fetcher:
         self.cache = offline_cache
         self._doh: dict[str, bool] = {}
         self.reserve_fn = lambda: 0
+        self._cooldown: dict[str, float] = {}
+        self._strikes: dict[str, int] = {}
+        self.rate_limited: dict[str, int] = {}
 
     # ---- budget -------------------------------------------------------
     @property
@@ -239,6 +242,7 @@ class Fetcher:
         headers: dict[str, str] | None = None,
         max_bytes: int = 3_000_000,
         attempts: int = 1,
+        max_wait: float = 15.0,
     ) -> Response:
         retrieved_at = utc_now()
         try:
@@ -252,6 +256,12 @@ class Fetcher:
         if respect_robots and not self.robots_allowed(url, module):
             return Response(url, url, 0, error="robots_disallowed", retrieved_at=retrieved_at)
         host = (urllib.parse.urlparse(url).hostname or "").lower()
+        cooling = self.cooldown_left(host)
+        if cooling > 0:
+            if cooling > max_wait or cooling > self.seconds_left() - 5:
+                # The site asked us to slow down: skip rather than hammer it.
+                return Response(url, url, 429, error=f"rate_limited: host cooling down {int(cooling)}s after 'too many requests'", retrieved_at=retrieved_at)
+            time.sleep(cooling)
         last: Response | None = None
         attempt = -1
         while attempt + 1 < attempts:
@@ -281,7 +291,13 @@ class Fetcher:
                     raw = b""
                 self._record(len(raw), elapsed)
                 last = Response(url, exc.geturl() or url, exc.code, raw, {k.lower(): v for k, v in (exc.headers or {}).items()}, f"HTTP {exc.code}", retrieved_at, elapsed)
-                if exc.code not in (429, 500, 502, 503, 504):
+                if exc.code in (429, 503):
+                    wait = self._back_off(host, last.headers.get("retry-after"), exc.code)
+                    if attempt + 1 < attempts and wait <= max_wait and wait < self.seconds_left() - 5:
+                        time.sleep(wait)
+                        continue
+                    break
+                if exc.code not in (500, 502, 504):
                     break
             except UnsafeURL as exc:
                 return Response(url, url, 0, error=f"unsafe_redirect: {exc}", retrieved_at=retrieved_at)
@@ -300,6 +316,36 @@ class Fetcher:
         if self.cache is not None:
             self.cache.store(url, last)
         return last
+
+    # ---- rate limiting ----------------------------------------------
+    def cooldown_left(self, host: str) -> float:
+        with self._lock:
+            return max(0.0, self._cooldown.get(host, 0.0) - time.monotonic())
+
+    def _back_off(self, host: str, retry_after: str | None, code: int) -> float:
+        """Honour Retry-After (seconds or HTTP date); otherwise back off exponentially per host."""
+        wait = None
+        if retry_after:
+            value = retry_after.strip()
+            if value.isdigit():
+                wait = float(value)
+            else:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    from datetime import datetime, timezone
+
+                    wait = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+                except Exception:
+                    wait = None
+        with self._lock:
+            strikes = self._strikes.get(host, 0) + 1
+            self._strikes[host] = strikes
+            if wait is None or wait <= 0:
+                wait = min(120.0, (5.0 if code == 503 else 10.0) * (2 ** (strikes - 1)))
+            wait = min(max(wait, 1.0), 300.0)
+            self._cooldown[host] = max(self._cooldown.get(host, 0.0), time.monotonic() + wait)
+            self.rate_limited[host] = self.rate_limited.get(host, 0) + 1
+        return wait
 
     def doh_resolves(self, host: str) -> bool:
         with self._lock:
@@ -336,6 +382,7 @@ class Fetcher:
             "bytes": self.bytes,
             "p50_ms": latencies[len(latencies) // 2] if latencies else None,
             "p95_ms": latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))] if latencies else None,
+            "rate_limited_responses": dict(sorted(self.rate_limited.items())),
         }
 
 

@@ -160,7 +160,8 @@ def _pace_years() -> None:
 
 
 def fetch_json(fetcher: Fetcher, url: str, module: str) -> tuple[Response, Any]:
-    response = fetcher.get(url, module=module, respect_robots=False, accept="application/json", timeout=20, attempts=2)
+    # Core official records: wait out a short "too many requests" (Retry-After) and retry.
+    response = fetcher.get(url, module=module, respect_robots=False, accept="application/json", timeout=20, attempts=3, max_wait=45)
     body = None
     if response.ok and response.body:
         try:

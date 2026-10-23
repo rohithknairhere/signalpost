@@ -1,9 +1,9 @@
 {
   "agent": "signalpost-agent/1.0.0",
   "run_id": "smoke-100",
-  "started_at": "2026-10-17T05:50:29Z",
-  "completed_at": "2026-10-17T05:58:52Z",
-  "runtime_seconds": 503.4,
+  "started_at": "2026-10-23T15:30:33Z",
+  "completed_at": "2026-10-23T15:40:25Z",
+  "runtime_seconds": 592.5,
   "expected_count": 100,
   "input_count": 100,
   "emitted_envelopes": 100,
@@ -31,25 +31,29 @@
     "seconds": null
   },
   "operations": {
-    "requests": 1698,
+    "requests": 1706,
     "request_budget": 1900,
     "requests_by_module": {
       "annual_report": 100,
       "dns": 465,
       "financial_history": 100,
       "financials": 100,
-      "jobs_nav": 152,
+      "jobs_nav": 154,
       "locations": 100,
       "registry_live": 100,
-      "reviews": 68,
+      "reviews": 66,
       "roles": 100,
-      "website": 411,
+      "website": 419,
       "website_identity": 1,
       "wikidata": 1
     },
-    "bytes": 125041747,
-    "p50_ms": 633,
-    "p95_ms": 3044,
+    "bytes": 125272246,
+    "p50_ms": 715,
+    "p95_ms": 3585,
+    "rate_limited_responses": {
+      "bruno.no": 2,
+      "www.bruno.no": 2
+    },
     "third_party_cost_usd": 0.0,
     "llm_calls": 0
   },
@@ -66,11 +70,11 @@
   "jobs_feed": {
     "status": "available",
     "error": null,
-    "pages_read": 151,
-    "items_indexed": 42725,
+    "pages_read": 153,
+    "items_indexed": 43949,
     "window": {
-      "from": "2026-08-03T08:03:40.953563+02:00",
-      "to": "2026-10-17T06:00:53.837437+02:00"
+      "from": "2026-08-09T19:33:03.730211+02:00",
+      "to": "2026-10-23T17:30:03.977446+02:00"
     }
   },
   "family_availability": {
@@ -87,32 +91,32 @@
       "available": 100
     },
     "registered_workplaces": {
-      "available": 73,
-      "not_available": 27
+      "available": 74,
+      "not_available": 26
     },
     "official_website": {
-      "blocked": 2,
+      "blocked": 1,
       "not_available": 70,
       "available": 7,
-      "ambiguous": 21
+      "ambiguous": 22
     },
     "public_brand": {
-      "blocked": 2,
+      "blocked": 1,
       "not_available": 70,
       "available": 8,
-      "ambiguous": 20
+      "ambiguous": 21
     },
     "company_profiles": {
-      "blocked": 2,
+      "blocked": 1,
       "not_available": 75,
-      "ambiguous": 21,
+      "ambiguous": 22,
       "available": 2
     },
     "website_contact": {
-      "blocked": 2,
+      "blocked": 1,
       "not_available": 70,
       "available": 7,
-      "ambiguous": 21
+      "ambiguous": 22
     },
     "hiring": {
       "not_available": 99,

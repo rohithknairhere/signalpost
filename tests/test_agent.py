@@ -239,3 +239,99 @@ def test_contact_page_addresses():
 
     text = "Kontakt oss: Strandgata 21, 4307 Sandnes. Postboks 32, 4301 Sandnes. Tlf 51 66 00 00"
     assert extract_addresses(text) == ["Strandgata 21, 4307 Sandnes"]
+
+
+def test_parent_group_site_is_not_published():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999999", {**ENTITY, "navn": "PROTECH NORGE AS"}, [])
+    p = page("<html><body>Protech AB is the parent of Protech Norge AS and Protech Danmark ApS.</body></html>", url="https://www.protech.se/")
+    assert classify_ownership(ident, [p], "protech.se", ["legal_name_on_site", "domain_matches_name"])[0] == "group"
+
+
+def test_shared_site_takes_no_profiles_news_or_jobs():
+    html = ('<html><body><a href="https://www.facebook.com/voltbyen">fb</a><a href="https://www.instagram.com/sandneselektriske">ig</a>'
+            '<script type="application/ld+json">{"@type":"JobPosting","title":"Elektriker","validThrough":"2099-01-01"}</script></body></html>')
+    pages = [page(html, url="https://voltbyen.no/"), page(html, url="https://voltbyen.no/kontakt", kind="contact")]
+    facts = extract_facts(pages, identity(), "voltbyen.no", ownership="shared")
+    assert not [p for p in facts["social_profiles"] if p["publishable"]]  # shared/brand site: no profiles at all
+    assert facts["job_postings"] == [] and facts["news"] == []
+    own = extract_facts(pages, identity(), "voltbyen.no", ownership="own")
+    assert {p["platform"] for p in own["social_profiles"] if p["publishable"]} == {"facebook", "instagram"}
+
+
+def test_group_and_vendor_profiles_rejected_even_on_own_site():
+    html = ('<html><body><a href="https://www.facebook.com/sandneselektriskegruppen">fb</a>'
+            '<a href="https://www.instagram.com/themeisle">ig</a><a href="https://www.linkedin.com/company/sandnes-elektriske">li</a></body></html>')
+    pages = [page(html), page(html, url="https://sandneselektriske.no/om-oss", kind="about")]
+    facts = extract_facts(pages, identity(), "sandneselektriske.no", ownership="own")
+    assert {p["platform"] for p in facts["social_profiles"] if p["publishable"]} == {"linkedin"}
+
+
+def test_backs_off_after_too_many_requests():
+    import time as _time
+
+    from signalpost_agent.net import Fetcher
+
+    fetcher = Fetcher(max_requests=10, deadline_monotonic=_time.monotonic() + 600)
+    assert fetcher._back_off("example.com", "120", 429) == 120  # honours Retry-After
+    response = fetcher.get("https://example.com/", module="test", respect_robots=False, max_wait=5)
+    assert response.status == 429 and "rate_limited" in (response.error or "")
+    assert fetcher.used == 0  # no request was sent while the host is cooling down
+    assert fetcher._back_off("slow.example.com", None, 429) == 10 and fetcher._back_off("slow.example.com", None, 429) == 20
+
+
+def test_industry_word_alone_does_not_match_and_country_sections_are_shared():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999998", {**ENTITY, "navn": "LUCRA REGNSKAP AS"}, [])
+    html = '<html><body><a href="https://www.facebook.com/evoregnskap">fb</a><a href="https://www.facebook.com/lucraregnskap">fb2</a></body></html>'
+    pages = [page(html, url="https://lucraregnskap.no/"), page(html, url="https://lucraregnskap.no/om-oss", kind="about")]
+    facts = extract_facts(pages, ident, "lucraregnskap.no", ownership="own")
+    assert [p["url"] for p in facts["social_profiles"] if p["publishable"]] == ["https://www.facebook.com/lucraregnskap"]
+    ident2 = build_identity("999999997", {**ENTITY, "navn": "SCANVAEGT SYSTEMS AS"}, [])
+    section = page("<html><body>Scanvaegt Systems AS org.nr 999 999 997</body></html>", url="https://www.scanvaegt.com/no")
+    assert classify_ownership(ident2, [section], "scanvaegt.com", ["organisation_number_on_site", "legal_name_on_site"])[0] == "shared"
+
+
+def test_chain_brand_profiles_not_published_for_member_company():
+    ident = build_identity("999999998", {**ENTITY, "navn": "LUCRA REGNSKAP AS"}, [])
+    html = ('<html><head><meta property="og:site_name" content="Evo Regnskap">'
+            '<script type="application/ld+json">{"@type":"Organization","name":"Evo Regnskap","sameAs":["https://www.facebook.com/evoregnskap"]}</script>'
+            '</head><body><a href="https://www.linkedin.com/company/evoregnskap">li</a></body></html>')
+    pages = [page(html, url="https://lucraregnskap.no/"), page(html, url="https://lucraregnskap.no/om-oss", kind="about")]
+    facts = extract_facts(pages, ident, "lucraregnskap.no", ownership="own")
+    assert not [p for p in facts["social_profiles"] if p["publishable"]]
+
+
+def test_sister_brand_profiles_and_own_language_sections():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999996", {**ENTITY, "navn": "FRIHEIM AKADEMIET AS"}, [])
+    html = ('<html><body><a href="https://www.instagram.com/friheimtrainingcenter">a</a>'
+            '<a href="https://www.facebook.com/friheimakademiet">b</a></body></html>')
+    pages = [page(html, url="https://friheimakademiet.no/"), page(html, url="https://friheimakademiet.no/om-oss", kind="about")]
+    facts = extract_facts(pages, ident, "friheimakademiet.no", ownership="own")
+    assert [p["platform"] for p in facts["social_profiles"] if p["publishable"]] == ["facebook"]
+    spenn = build_identity("999999995", {**ENTITY, "navn": "SPENN GROUP AS"}, [])
+    section = page("<html><body>Spenn Group AS</body></html>", url="https://spenngroup.com/nb-NO")
+    assert classify_ownership(spenn, [section], "spenngroup.com", ["organisation_number_on_site", "domain_matches_name"])[0] == "own"
+
+
+def test_menu_words_before_own_name_are_not_a_group():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999994", {**ENTITY, "navn": "FLOTTE GULV AS"}, [])
+    home = page("<html><body>Facebook-f Instagram Flotte Gulv AS. Kontakt Flotte Gulv AS</body></html>", url="https://flottegulv.no/")
+    assert classify_ownership(ident, [home], "flottegulv.no", ["legal_name_on_site", "domain_matches_name"])[0] == "own"
+    sister = page("<html><body>Flotte Gulv AS og Flotte Gulv Bergen AS</body></html>", url="https://flottegulv.no/")
+    assert classify_ownership(ident, [sister], "flottegulv.no", ["legal_name_on_site", "domain_matches_name"])[0] == "group"
+
+
+def test_glued_foreign_suffix_handle_rejected():
+    ident = build_identity("999999993", {**ENTITY, "navn": "WHATEVER THE SEASON AS"}, [])
+    html = ('<html><body><a href="https://www.facebook.com/whatevertheseasonltd">a</a>'
+            '<a href="https://www.instagram.com/whatevertheseason">b</a></body></html>')
+    pages = [page(html, url="https://whatevertheseason.com/"), page(html, url="https://whatevertheseason.com/about", kind="about")]
+    facts = extract_facts(pages, ident, "whatevertheseason.com", ownership="own")
+    assert [p["platform"] for p in facts["social_profiles"] if p["publishable"]] == ["instagram"]

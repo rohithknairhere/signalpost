@@ -19,7 +19,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from .net import BudgetExhausted, Fetcher, Response, local_dns_available, resolves
-from .util import ascii_fold, clean_text, compact_org_pattern, digits, distinctive_tokens, name_tokens, org_numbers_in_text, tokens
+from .util import ascii_fold, clean_text, compact_org_pattern, digits, normalized_name, distinctive_tokens, name_tokens, org_numbers_in_text, tokens
 
 FREE_MAIL_DOMAINS = {
     "gmail.com", "googlemail.com", "hotmail.com", "hotmail.no", "outlook.com", "outlook.no", "live.com", "live.no",
@@ -66,6 +66,8 @@ SHARED_SERVICE_DOMAINS = {
     "wixsite.com", "squarespace.com", "webnode.com", "weebly.com", "blogspot.com", "wordpress.com", "github.io",
     "mittanbud.no", "fagfolkguiden.no", "purehelp.no", "brreg.no", "google.com", "sites.google.com",
 }
+GROUP_WORDS = ("gruppen", "group", "konsern", "konsernet", "holding", "alliansen", "kjeden", "nordic", "global", "international", "scandinavia", "worldwide", "europe")
+VENDOR_WORDS = ("themeforest", "themeisle", "elementor", "envato", "webdesign", "nettsider", "wixstudio", "squarespace", "wordpress", "godaddy", "webflow", "hostinger", "onecom", "domeneshop")
 FOREIGN_LEGAL_SUFFIXES = {"ab", "aps", "oy", "oyj", "gmbh", "ag", "ltd", "limited", "inc", "llc", "bv", "nv", "sarl", "sas", "srl", "spa", "plc", "corp", "group"}
 CREDIT_RE = re.compile(r"(levert av|utviklet av|laget av|designet av|design av|design:|nettside av|webdesign|powered by|designed by|developed by|theme by|made by|built by|drevet av)")
 SOCIAL_VENDOR_HANDLES = {"theme_fusion", "themefusion", "envato", "elegantthemes", "elegant_themes", "wix", "wixcom", "squarespace",
@@ -602,11 +604,62 @@ def _research_one(fetcher: Fetcher, identity: Identity, url: str, source: str, *
     if verdict["verdict"] == "exact" and domain != candidate_domain and "organisation_number_on_site" not in verdict["signals"] and "domain_matches_name" not in verdict["signals"]:
         # Redirected to another organisation's platform (franchise, chain or directory page).
         verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + ["redirected_to_unrelated_domain"]}
+    ownership, related = ("", [])
+    if verdict["verdict"] == "exact":
+        ownership, related = classify_ownership(identity, pages, domain, verdict["signals"])
+        if ownership == "group":
+            # A parent group's or sister company's site: not this company's own website.
+            verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + ["group_or_parent_site"], "related_entities": related}
     result = {"url": url, "final_url": home.url, "domain": domain, "source": source, **verdict}
     if verdict["verdict"] == "exact":
+        result["ownership"] = ownership
         result["pages"] = [_page_record(page) for page in pages]
-        result["extracted"] = extract_facts(pages, identity, domain)
+        result["extracted"] = extract_facts(pages, identity, domain, ownership=ownership)
     return result
+
+
+ENTITY_RE = re.compile(r"([A-ZÆØÅ][A-Za-zÆØÅæøå0-9&.\-]*(?:\s+(?:[A-ZÆØÅ&][A-Za-zÆØÅæøå0-9&.\-]*|og|of|and)){0,4})\s+(AS|ASA|AB|A/S|ApS|Oy|Oyj|GmbH|Ltd|Limited|Inc|BV|SA)\b")
+LOCALE_SEGMENTS = {"no", "nb", "nn", "no-no", "nb-no", "no-nb", "nor", "norway", "norge", "en", "en-no", "se", "sv", "dk", "da", "fi", "de", "uk", "us", "global", "int", "nordic", "nordics", "scandinavia"}
+NORWEGIAN_OR_GENERIC_TLDS = {"no", "com", "net", "org", "io", "co", "as", "app", "eu", "biz", "info", "online", "site", "shop", "store", "tech", "cloud", "xyz", "me", "nu"}
+
+
+def classify_ownership(identity: Identity, pages: list[Page], domain: str, signals: list[str]) -> tuple[str, list[str]]:
+    """own: the company's own site; shared: its registry/e-mail site under another brand
+    (publish the site, but only profiles named like the company, no news or jobs);
+    group: a parent/group or sister company's site (publish nothing from it)."""
+    ours = {normalized_name(identity.name)} | {normalized_name(name) for name in identity.historical_names}
+    distinct = distinctive_tokens(identity.name)
+    anchor = distinct[0] if distinct else None
+    related: list[str] = []
+    for page in pages:
+        for words, suffix in ENTITY_RE.findall(page.text or ""):
+            word_tokens = name_tokens(words)
+            if not anchor or anchor not in word_tokens:
+                continue
+            # Trim menu words captured in front ("Facebook Instagram Flotte Gulv AS" -> "flotte gulv").
+            trimmed = " ".join(word_tokens[word_tokens.index(anchor):])
+            if not trimmed or trimmed in ours or (suffix in {"AS", "ASA"} and trimmed + " " + suffix.lower() in ours):
+                continue
+            related.append(f"{trimmed} {suffix}")
+    related = sorted(set(related))[:5]
+    own_number = "organisation_number_on_site" in signals
+    tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
+    first_segment = urllib.parse.urlparse(pages[0].url).path.strip("/").split("/")[0].lower() if pages else ""
+    localized_section = first_segment in LOCALE_SEGMENTS
+    if localized_section and tld != "no" and "domain_matches_name" not in signals:
+        # e.g. scanvaegt.com/no: the Norwegian section of a multinational group site.
+        return "shared", related
+    if own_number:
+        if "domain_matches_name" in signals:
+            return "own", related  # e.g. a parent's own site that lists its subsidiaries
+        return ("group" if len(related) >= 3 else "own"), related
+    if related:
+        return "group", related
+    if tld and tld not in NORWEGIAN_OR_GENERIC_TLDS:
+        return "group", related  # e.g. a Swedish or Danish parent's site
+    if "domain_matches_name" in signals:
+        return "own", related
+    return "shared", related
 
 
 # Web agencies, IT/hosting, marketing and accounting firms put their own number in site footers.
@@ -635,7 +688,7 @@ def _page_record(page: Page) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- extraction
 
-def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[str, Any]:
+def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership: str = "own") -> dict[str, Any]:
     home = pages[0]
     socials: dict[tuple[str, str], dict[str, Any]] = {}
     jsonld_orgs: list[dict[str, Any]] = []
@@ -678,16 +731,28 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         handle_compact = re.sub(r"[^a-z0-9]", "", ascii_fold(entry["handle"]))
         domain_stem = re.sub(r"[^a-z0-9]", "", domain.split(".")[0])
         brand_compact = re.sub(r"[^a-z0-9]", "", ascii_fold(brand_hint))
-        entry["handle_matches_name"] = bool(
-            (distinct and (name_compact in handle_compact or all(token in handle_compact for token in distinct)))
-            or (len(domain_stem) >= 4 and domain_stem in handle_compact)
-            or (len(brand_compact) >= 4 and brand_compact in handle_compact)
-            or any(len(token) >= 5 and token[:6] in handle_compact for token in distinct)
-        )
-        if entry["handle"].lower().replace("-", "_") in SOCIAL_VENDOR_HANDLES:
+        # Every distinctive word of the legal name must appear (a 6-letter stem is enough), so
+        # sister brands ("friheimtrainingcenter" for Friheim Akademiet) and shared industry words do not match.
+        name_match = bool(distinct) and (name_compact in handle_compact or all(token[:6] in handle_compact for token in distinct))
+        # The site's brand name (og:site_name) is not used: chains and franchises brand member sites.
+        site_match = len(domain_stem) >= 4 and domain_stem in handle_compact
+        # On a site that is not unambiguously the company's own, a profile must carry the company's own name.
+        # Profiles are only taken from the company's own site; a shared or group-wide site's
+        # accounts usually belong to the group or brand, not to this legal entity.
+        entry["handle_matches_name"] = ownership == "own" and (name_match or site_match)
+        if ownership != "own":
+            entry["methods"].discard("jsonld_sameAs")
+        if entry["handle"].lower().replace("-", "_") in SOCIAL_VENDOR_HANDLES or any(word in handle_compact for word in VENDOR_WORDS):
             entry["handle_matches_name"] = False
+            entry["methods"].discard("jsonld_sameAs")
+        own_words = set(tokens(identity.name))
+        if any(word in handle_compact for word in GROUP_WORDS) and not any(word in own_words for word in GROUP_WORDS):
+            # "midtbygggruppen" on Midt-Bygg AS's site is the parent group's account, not the company's.
+            entry["handle_matches_name"] = False
+            entry["methods"].discard("jsonld_sameAs")
         handle_parts = re.split(r"[^a-z0-9]+", ascii_fold(entry["handle"]))
-        if handle_parts and handle_parts[-1] in FOREIGN_LEGAL_SUFFIXES and handle_parts[-1] not in tokens(identity.name):
+        glued_suffix = next((suffix for suffix in ("limited", "gmbh", "ltd", "inc", "llc", "aps", "oyj") if handle_compact.endswith(suffix) and suffix not in tokens(identity.name)), None)
+        if glued_suffix or (handle_parts and handle_parts[-1] in FOREIGN_LEGAL_SUFFIXES and handle_parts[-1] not in tokens(identity.name)):
             # e.g. "protech-ab" on a Norwegian AS's group site: the foreign parent's profile.
             entry["handle_matches_name"] = False
             entry["methods"].discard("jsonld_sameAs")
@@ -702,7 +767,8 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         # A single link on one page (e.g. an employee's personal account) is not enough.
         # Company-owned only when declared in structured data or named like the company,
         # its domain or its brand. Unnamed links (owners' personal accounts, theme vendors) are quarantined.
-        confident = "jsonld_sameAs" in best["methods"] or best["handle_matches_name"]
+        # Structured-data sameAs alone is not enough either: it often declares the chain's or group's accounts.
+        confident = best["handle_matches_name"]
         profiles.append({
             "platform": platform,
             "url": best["url"],
@@ -736,9 +802,11 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str) -> dict[st
         if page.kind == "about" and page.text:
             about_text = page.text[:1200]
             break
-    careers = next((page for page in pages if page.kind == "careers" and page.text), None)
-    news = extract_news(pages, domain)
-    job_postings = extract_job_postings(pages, domain)
+    own_site = ownership == "own"
+    # News, jobs and careers pages are only taken from the company's own site, never a shared or brand site.
+    careers = next((page for page in pages if page.kind == "careers" and page.text), None) if own_site else None
+    news = extract_news(pages, domain) if own_site else []
+    job_postings = extract_job_postings(pages, domain) if own_site else []
     founding = next((str(node.get("foundingDate")) for node in jsonld_orgs if node.get("foundingDate")), None)
     return {
         "brand_name": brand or None,

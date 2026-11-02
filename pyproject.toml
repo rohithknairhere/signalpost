@@ -1,6 +1,6 @@
 [project]
 name = "signalpost-agent"
-version = "1.0.0"
+version = "1.2.0"
 description = "Evidence-backed research agent for Norwegian companies (Builderr Signalpost)."
 readme = "README.md"
 requires-python = ">=3.10"

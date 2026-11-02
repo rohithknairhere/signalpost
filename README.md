@@ -51,9 +51,9 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 
 - **Models:** none. Synthesis is deterministic and evidence-bound, with no LLM calls.
 - **Expected external API cost per official run:** **$0.00**. All sources are free public APIs or public web pages.
-- **Requests:** about 12–13 per company at 100 companies (≈1,250 including the shared NAV feed and annual-report copies), always under `--max-requests`. The agent plans its budget from the batch size and never exceeds `--max-requests`.
-- **Runtime:** about 9 minutes for 100 companies with annual-report OCR.
-- **Any batch size, any budget:** the agent plans from the batch size, the request cap and the time budget. Core official records (accounts, people, addresses) come first. Website depth, ratings and OCR shrink before anything core is dropped, and a watchdog guarantees one terminal envelope per company before the deadline. Tested: 100 companies in about 9 minutes, 300, 1,000, and a forced 2-minute budget (all 100 envelopes, completed).
+- **Requests:** about 17–18 per company at 100 companies without the bulk file (≈1,750 including the shared NAV feed, filing-year lists and annual-report copies), and about 13.5 per company at 1,000 companies with it. Always under `--max-requests`. The agent plans its budget from the batch size and never exceeds `--max-requests`.
+- **Runtime:** about 10 minutes for 100 companies and about 31 minutes for 1,000 companies, with default flags and annual-report OCR. Annual reports are downloaded and read in a background pipeline, so they never slow website research.
+- **Any batch size, any budget:** the agent plans from the batch size, the request cap and the time budget. Core official records (accounts, people, addresses) come first. Website depth, ratings and OCR shrink before anything core is dropped, and a watchdog guarantees one terminal envelope per company before the deadline. Tested with default flags: 100 companies in about 10 minutes, 300 in 26 minutes, 1,000 in 31 minutes, plus a forced 2-minute budget (all 100 envelopes, completed).
 - **Code licence:** MIT.
 
 ## Sources and rights
@@ -76,15 +76,15 @@ It is better to miss a fact than to attach it to the wrong company, so:
 
 1. **The organisation number is the anchor.** Registry, accounts, roles and workplaces come from endpoints keyed by the number.
 2. **A website is published only when it proves its own identity:** the organisation number on the site (including in script data for JavaScript-built sites), or the exact legal name with a domain that matches the name. A registry-declared site may also be verified by all of its registry contact details (phone, e-mail and address). A shared phone or address on its own only proves co-location (accountants, housing managers, franchise chains), so it never verifies a site. Housing-manager and directory domains never verify a member company. A site showing **another** company's number and not ours is rejected, unless a registry lookup shows that number belongs to a web agency, IT or accounting firm with an unrelated name (footer credits). Redirects to an unrelated domain (franchise pages) and parked domains are rejected. Uncertain candidates are returned as `ambiguous` with the evidence for and against.
-3. **Own, shared or group site.** Every verified site is classified:
-   - **own:** the organisation number is on it, or the domain carries the company's name.
-   - **shared:** a registry- or e-mail-declared site under another brand, or the Norwegian section of a multinational site (e.g. `example.com/no`).
-   - **group:** it names sister or parent entities, or it is a foreign parent's domain.
-   Group sites are never published. From a shared site we publish only the address: no profiles, news, jobs or careers.
-4. **Profiles** are published only from the company's own site, and only when they are declared in structured data or named like the company, its domain or its brand. A common industry word ("regnskap", "bygg") is not a name match. These are rejected: parent-group handles ("…gruppen", "…group", "-ab", "-gmbh"), owners' personal accounts, and web-agency, theme and "designed by" links.
-5. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces). Open positions the verified website itself publishes as schema.org `JobPosting` are added as company-owned evidence.
-6. **Workforce** is published only when the filed annual report states it explicitly; the claim quotes the OCR'd sentence and page.
-7. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
+3. **Own, another organisation's, or group site.** Every verified site is classified, and only the company's **own** site is published:
+   - **own:** the organisation number is on it, or the domain carries the company's name, or it is the registry-declared site naming the company with its registry phone, e-mail and address.
+   - **another organisation's site** (property manager, dealer page on a brand site, municipality page, sister brand): returned as `ambiguous`, never published.
+   - **group:** it names sister or parent entities, it is a "…gruppen"/"…group" domain, a foreign parent's domain, the Norwegian section of a multinational site (`example.com/no`), a parent's e-mail domain, or an operating company's site for a holding company. Never published.
+4. **Profiles** are published only from the company's own site, and only when they are declared in structured data or named like the company, its domain or its brand. A common industry word ("regnskap", "bygg") is not a name match. These are rejected: parent-group handles ("…gruppen", "…group", "-ab", "-gmbh"), international group pages for a "… Norway AS" (no country word in the handle), owners' personal accounts, and web-agency, theme and "designed by" links.
+5. **News** comes only from the company's own site: dated articles in its structured data, dated news listings, and its own RSS/Atom feed. Every item has a date and a link on the company's domain.
+6. **Jobs** are name-shortlisted from the NAV feed, then confirmed from each ad's employer organisation number (the company or one of its registered workplaces). Open positions the verified website itself publishes as schema.org `JobPosting` are added as company-owned evidence.
+7. **Workforce** is published only when the filed annual report states it explicitly; the claim quotes the OCR'd sentence and page.
+8. **Financial values** are copied from Regnskapsregisteret with currency and period. The one derived figure (year-on-year revenue change) is labelled as derived.
 
 ## Output contract
 

@@ -95,7 +95,9 @@ def plan_for(n: int, max_requests: int, *, has_bulk: bool = False, time_budget_s
     # The filing-copy endpoints allow ~30 requests/minute; keep them inside a third of the time budget.
     paced_slots = int(time_budget_s / 3 / 2.2)
     plan["years"] = plan["tier"] in {"full", "reduced"} and 2 * n <= paced_slots
-    plan["ocr_limit"] = max(0, min(n, paced_slots - (n if plan["years"] else 0))) if plan["tier"] != "minimal" else 0
+    # Each report takes ~10 CPU-seconds to read; size the reading to the machine as well as the paced endpoint.
+    cpu_slots = int((os.cpu_count() or 2) * time_budget_s * 0.6 / 10)
+    plan["ocr_limit"] = max(0, min(n, cpu_slots, paced_slots - (n if plan["years"] else 0))) if plan["tier"] != "minimal" else 0
     plan.update(nav_pages=nav_pages, allowance=round(allowance, 1))
     return plan
 

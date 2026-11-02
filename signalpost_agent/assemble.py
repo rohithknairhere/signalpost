@@ -273,6 +273,13 @@ def build_profile(org: str, bulk_entity: dict[str, Any] | None, bulk_meta: dict[
         page_evs = [site_ev] + [b.add_evidence(page["url"], "company_owned_website", page.get("retrieved_at"), page.get("sha256"), span=f"{page.get('kind')} page") for page in pages[1:]]
         b.claim("official_website", "official_website", website["final_url"], page_evs[:3], confidence=website.get("score", 0.9), method=f"verified:{website.get('source')}")
         b.claim("official_website", "website_domain", website.get("domain"), [site_ev], confidence=website.get("score", 0.9))
+        if str(website.get("domain") or "").startswith("xn--"):
+            try:
+                readable = website["domain"].encode().decode("idna")
+            except UnicodeError:
+                readable = None
+            if readable:
+                b.claim("official_website", "website_domain_display", readable, [site_ev], confidence=website.get("score", 0.9))
         b.claim("official_website", "verification_signals", website.get("signals"), [site_ev], confidence=website.get("score", 0.9))
         ownership = website.get("ownership") or "own"
         b.claim("official_website", "website_ownership", ownership, [site_ev], confidence=website.get("score", 0.9))

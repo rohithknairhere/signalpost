@@ -42,6 +42,10 @@ STOP_RE = re.compile(r"(?i)(uavhengig\s+revisors\s+beretning|revisjonsberetning)
 _OCR_SLOTS = threading.Semaphore(max(1, (os.cpu_count() or 2)))
 
 
+# OCR runs at low CPU priority so it never slows the research workers sharing the machine.
+NICE = ["nice", "-n", "15"] if shutil.which("nice") else []
+
+
 def ocr_available() -> tuple[bool, str]:
     if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
         return False, "OCR tools (pdftoppm, tesseract) not installed; annual-report text not read"
@@ -117,9 +121,9 @@ def ocr_filing(download: dict[str, Any], *, language: str, seconds_left, max_pag
                 return {"status": "failed", **base, "pages_read": pages_read, "error": "time budget reached while reading the annual report"}
             prefix = Path(tmp) / f"p{page}"
             try:
-                subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", "110", "-gray", str(pdf), str(prefix)], check=True, capture_output=True, timeout=60)
+                subprocess.run(NICE + ["pdftoppm", "-f", str(page), "-l", str(page), "-r", "110", "-gray", str(pdf), str(prefix)], check=True, capture_output=True, timeout=60)
                 image = next(Path(tmp).glob(f"p{page}*.pgm"))
-                text = subprocess.run(["tesseract", str(image), "-", "-l", language, "--psm", "6"], capture_output=True, text=True, timeout=60, env={**os.environ, "OMP_THREAD_LIMIT": "1"}).stdout
+                text = subprocess.run(NICE + ["tesseract", str(image), "-", "-l", language, "--psm", "6"], capture_output=True, text=True, timeout=60, env={**os.environ, "OMP_THREAD_LIMIT": "1"}).stdout
                 image.unlink(missing_ok=True)
             except Exception:
                 continue

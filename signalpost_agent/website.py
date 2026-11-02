@@ -680,14 +680,19 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
     ours = {normalized_name(identity.name)} | {normalized_name(name) for name in identity.historical_names}
     distinct = distinctive_tokens(identity.name)
     anchor = distinct[0] if distinct else None
+    own_token_sets = [name_tokens(identity.name)] + [name_tokens(name) for name in identity.historical_names]
     related: list[str] = []
     for page in pages:
         for words, suffix in ENTITY_RE.findall(page.text or ""):
             word_tokens = name_tokens(words)
             if not anchor or anchor not in word_tokens:
                 continue
+            # Our own name at the end of a captured run is us ("Øl Wongraven Saison Wongraven Wines AS").
+            if any(own and word_tokens[-len(own):] == own for own in own_token_sets):
+                continue
             # Trim menu words captured in front ("Facebook Instagram Flotte Gulv AS" -> "flotte gulv").
-            trimmed = " ".join(word_tokens[word_tokens.index(anchor):])
+            last = len(word_tokens) - 1 - word_tokens[::-1].index(anchor)
+            trimmed = " ".join(word_tokens[last:])
             if not trimmed or trimmed in ours or (suffix in {"AS", "ASA"} and trimmed + " " + suffix.lower() in ours):
                 continue
             related.append(f"{trimmed} {suffix}")

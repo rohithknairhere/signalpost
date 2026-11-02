@@ -356,3 +356,13 @@ def test_feed_news_is_dated_and_same_site():
            "<pubDate>Tue, 09 Sep 2025 10:00:00 +0000</pubDate></item><item><title>Undated</title><link>https://www.ex.no/u</link></item></channel></rss>")
     news = extract_news([Page("https://www.ex.no/feed/", "feed", 200, "t", "h", raw=rss)], "ex.no")
     assert [(item["date"], item["url"]) for item in news] == [("2025-09-09", "https://www.ex.no/ny/")]
+
+
+def test_own_name_inside_menu_text_is_not_a_related_company():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999996", {**ENTITY, "navn": "WONGRAVEN WINES AS"}, [])
+    own = page("<html><body>Øl Wongraven Saison Wongraven Wines AS. Contact Wongraven Wines AS</body></html>", url="https://wongravenwines.no/")
+    assert classify_ownership(ident, [own], "wongravenwines.no", ["legal_name_on_site", "domain_matches_name"])[0] == "own"
+    parent = page("<html><body>Wongraven Wines AS er en del av Wongraven Holding AS</body></html>", url="https://wongravenwines.no/")
+    assert classify_ownership(ident, [parent], "wongravenwines.no", ["legal_name_on_site", "domain_matches_name"])[0] == "group"

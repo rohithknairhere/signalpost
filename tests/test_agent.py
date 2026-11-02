@@ -375,7 +375,7 @@ def test_parent_domains_holding_names_and_international_profiles():
     home = lambda url, text="": page(f"<html><body>{text}</body></html>", url=url)
     corr = ["legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
     assert classify_ownership(ent("OPSAHL EIENDOM AS"), [home("https://opsahlgruppen.no/")], "opsahlgruppen.no", corr + ["domain_matches_name"])[0] == "group"
-    assert classify_ownership(ent("PELLERIN HOLDING AS"), [home("https://pellerin.no/")], "pellerin.no", corr + ["domain_matches_name"])[0] == "group"
+    assert classify_ownership(ent("PELLERIN HOLDING AS"), [home("https://pellerin.no/")], "pellerin.no", ["name_on_site", "registry_phone_on_site", "domain_matches_name"])[0] == "group"
     assert classify_ownership(ent("RØDØY-LURØY KRAFTVERK AS"), [home("https://www.sks.no/")], "sks.no", corr + ["organisation_number_on_site"], "registry_email_domain")[0] == "group"
     assert classify_ownership(ent("INNVIK FRUKTLAGER SA"), [home("https://www.innvikfrukt.no/")], "innvikfrukt.no", corr, "registry_website")[0] == "own"
     assert classify_ownership(ent("MØLLER BIL INNLANDET AS"), [home("https://mollerbil.no/forhandler/hamar")], "mollerbil.no", corr, "registry_website")[0] == "shared"
@@ -391,3 +391,12 @@ def test_own_number_on_shortened_email_domain_is_own():
     ident = build_identity("999999994", {**ENTITY, "navn": "DAHLES DELESERVICE AS"}, [])
     signals = ["organisation_number_on_site", "legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
     assert classify_ownership(ident, [page("<html><body>x</body></html>", url="https://dahledel.no/")], "dahledel.no", signals, "registry_email_domain")[0] == "own"
+
+
+def test_single_letter_name_parts_and_named_investment_companies():
+    from signalpost_agent.website import classify_ownership, name_domain_candidates
+
+    assert "a-seafood.com" in name_domain_candidates("A-SEAFOOD AS", limit=12)
+    ident = build_identity("999999993", {**ENTITY, "navn": "CARLIN INVEST AS"}, [])
+    signals = ["legal_name_on_site", "registry_phone_on_site", "domain_matches_name"]
+    assert classify_ownership(ident, [page("<html><body>Carlin Invest AS</body></html>", url="https://www.carlin.no/")], "carlin.no", signals)[0] == "own"

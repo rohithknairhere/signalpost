@@ -166,7 +166,7 @@ def _strip_legal(words: list[str]) -> list[str]:
         words.pop()
     while len(words) > 1 and words[0] in LEGAL_TOKENS - {"as"}:
         words.pop(0)
-    return [w for w in words if w not in {"a", "s"} or len(words) == 1]
+    return words
 
 
 def name_domain_candidates(name: str, limit: int = 7) -> list[str]:
@@ -721,7 +721,7 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
     if any(word in label for word in GROUP_WORDS) and not any(word in own_words for word in GROUP_WORDS):
         # opsahlgruppen.no for Opsahl Eiendom AS: the group's site.
         return "group", related
-    if own_words & {"holding", "holdings", "invest", "investering"} and not own_number:
+    if own_words & {"holding", "holdings", "invest", "investering"} and not own_number and "legal_name_on_site" not in signals:
         # A holding company's name on its operating subsidiary's site (pellerin.no for Pellerin Holding AS).
         return "group", related
     host_hits = [token for token in distinct if len(token) >= 3 and any(token in form for form in host_name_forms(domain))]

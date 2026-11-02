@@ -16,7 +16,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from bs4 import BeautifulSoup
+import warnings
+
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)  # news feeds are read as XML separately
 
 from .net import BudgetExhausted, Fetcher, Response, local_dns_available, resolves
 from .util import ascii_fold, clean_text, compact_org_pattern, digits, normalized_name, distinctive_tokens, name_tokens, org_numbers_in_text, tokens
@@ -724,7 +728,8 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
     if own_number:
         if "domain_matches_name" in signals:
             return "own", related  # e.g. a parent's own site that lists its subsidiaries
-        if source == "registry_email_domain" and not host_hits:
+        stem_hits = [token for token in distinct if len(token) >= 5 and any(token[:5] in form for form in host_name_forms(domain))]
+        if source == "registry_email_domain" and not host_hits and not stem_hits:
             # The company's e-mail is on its parent's or manager's domain (sks.no for a power-plant subsidiary).
             return "group", related
         return ("group" if len(related) >= 3 else "own"), related

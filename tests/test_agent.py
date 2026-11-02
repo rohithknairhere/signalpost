@@ -383,3 +383,11 @@ def test_parent_domains_holding_names_and_international_profiles():
     pages = [page(html, url="https://trescal.no/"), page(html, url="https://trescal.no/om-oss", kind="about")]
     facts = extract_facts(pages, ent("TRESCAL NORWAY AS"), "trescal.no", ownership="own")
     assert [p["url"] for p in facts["social_profiles"] if p["publishable"]] == ["https://www.facebook.com/trescalnorway"]
+
+
+def test_own_number_on_shortened_email_domain_is_own():
+    from signalpost_agent.website import classify_ownership
+
+    ident = build_identity("999999994", {**ENTITY, "navn": "DAHLES DELESERVICE AS"}, [])
+    signals = ["organisation_number_on_site", "legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
+    assert classify_ownership(ident, [page("<html><body>x</body></html>", url="https://dahledel.no/")], "dahledel.no", signals, "registry_email_domain")[0] == "own"

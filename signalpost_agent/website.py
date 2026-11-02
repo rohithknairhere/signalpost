@@ -141,6 +141,17 @@ def email_domain(email: str | None) -> str | None:
     return domain
 
 
+def acronym_matches(words: list[str], forms: set[str]) -> bool:
+    """Initials of the leading words plus the rest of the name ("am" + "partner")."""
+    if len(words) < 2:
+        return False
+    for k in range(1, len(words) + 1):
+        candidate = "".join(word[0] for word in words[:k]) + "".join(words[k:])
+        if (k >= 2 or len(words) == 1) and len(candidate) >= 3 and candidate in forms:
+            return True
+    return False
+
+
 def host_name_forms(host: str) -> set[str]:
     """The domain label as comparable letters: IDN decoded, and aa/oe spellings folded."""
     label = registered_domain(host).split(".")[0] if host else ""
@@ -725,6 +736,8 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
         # A holding company's name on its operating subsidiary's site (pellerin.no for Pellerin Holding AS).
         return "group", related
     host_hits = [token for token in distinct if len(token) >= 3 and any(token in form for form in host_name_forms(domain))]
+    if distinct and acronym_matches(name_tokens(identity.name), host_name_forms(domain)):
+        host_hits = list(distinct)  # ampartner.com for Asset Management Partner AS
     if own_number:
         if "domain_matches_name" in signals:
             return "own", related  # e.g. a parent's own site that lists its subsidiaries

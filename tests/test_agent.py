@@ -400,3 +400,13 @@ def test_single_letter_name_parts_and_named_investment_companies():
     ident = build_identity("999999993", {**ENTITY, "navn": "CARLIN INVEST AS"}, [])
     signals = ["legal_name_on_site", "registry_phone_on_site", "domain_matches_name"]
     assert classify_ownership(ident, [page("<html><body>Carlin Invest AS</body></html>", url="https://www.carlin.no/")], "carlin.no", signals)[0] == "own"
+
+
+def test_acronym_domain_of_registry_site_is_own():
+    from signalpost_agent.website import acronym_matches, classify_ownership
+
+    assert acronym_matches(["asset", "management", "partner"], {"ampartner"})
+    assert not acronym_matches(["asset", "management", "partner"], {"apartner"})
+    ident = build_identity("999999992", {**ENTITY, "navn": "ASSET MANAGEMENT PARTNER AS"}, [])
+    signals = ["legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
+    assert classify_ownership(ident, [page("<html><body>x</body></html>", url="https://www.ampartner.com/")], "ampartner.com", signals, "registry_website")[0] == "own"

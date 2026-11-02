@@ -79,24 +79,33 @@ def parse_workforce(text: str) -> dict[str, Any] | None:
     return None
 
 
-def read_workforce(fetcher: Fetcher, org: str, year: str, *, language: str, max_pages: int = 14, min_seconds_left: float = 420) -> dict[str, Any]:
+def download_filing(fetcher: Fetcher, org: str, year: str, *, min_seconds_left: float = 240) -> dict[str, Any]:
+    """Paced download of the filing copy (Regnskapsregisteret allows ~30 requests/minute)."""
     url = ACCOUNT_PDF.format(org=org, year=year)
     if fetcher.seconds_left() < min_seconds_left:
         return {"status": "failed", "error": "time budget reserved; annual report not read", "url": url}
+    if not fetcher.can_spend(1):
+        return {"status": "failed", "error": "request budget reserved for core official records", "url": url}
     try:
         _pace_years()
-        response = fetcher.get(url, module="annual_report", respect_robots=False, accept="*/*", timeout=40, max_bytes=25_000_000)
+        response = fetcher.get(url, module="annual_report", respect_robots=False, accept="*/*", timeout=40, max_bytes=25_000_000, attempts=2, max_wait=30)
     except BudgetExhausted as exc:
         return {"status": "failed", "error": str(exc), "url": url}
     if response.status in (404, 410):
         return {"status": "not_available", "url": url, "error": "no filing copy for this year"}
     if not response.ok or not response.body.startswith(b"%PDF"):
         return {"status": "failed", "url": url, "error": response.error or f"HTTP {response.status}"}
-    digest = sha256_bytes(response.body)
+    return {"status": "downloaded", "url": url, "year": year, "body": response.body, "sha256": sha256_bytes(response.body), "retrieved_at": response.retrieved_at}
+
+
+def ocr_filing(download: dict[str, Any], *, language: str, seconds_left, max_pages: int = 14, stop_below: float = 90) -> dict[str, Any]:
+    """OCR a downloaded filing page by page; stop at the workforce note or the auditor's report."""
+    url, year = download["url"], download["year"]
     started = time.monotonic()
+    base = {"url": url, "sha256": download["sha256"], "retrieved_at": download["retrieved_at"], "year": year}
     with tempfile.TemporaryDirectory(prefix="signalpost-ar-") as tmp:
         pdf = Path(tmp) / "report.pdf"
-        pdf.write_bytes(response.body)
+        pdf.write_bytes(download["body"])
         try:
             info = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, text=True, timeout=20).stdout if shutil.which("pdfinfo") else ""
             pages = int(re.search(r"Pages:\s+(\d+)", info).group(1)) if "Pages:" in info else max_pages
@@ -104,21 +113,97 @@ def read_workforce(fetcher: Fetcher, org: str, year: str, *, language: str, max_
             pages = max_pages
         pages_read = 0
         for page in range(1, min(pages, max_pages) + 1):
-            if fetcher.seconds_left() < min_seconds_left / 2:
-                break
-            with _OCR_SLOTS:
-                prefix = Path(tmp) / f"p{page}"
-                try:
-                    subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", "110", "-gray", str(pdf), str(prefix)], check=True, capture_output=True, timeout=60)
-                    image = next(Path(tmp).glob(f"p{page}*.pgm"))
-                    text = subprocess.run(["tesseract", str(image), "-", "-l", language, "--psm", "6"], capture_output=True, text=True, timeout=60, env={**os.environ, "OMP_THREAD_LIMIT": "1"}).stdout
-                    image.unlink(missing_ok=True)
-                except Exception:
-                    continue
+            if seconds_left() < stop_below:
+                return {"status": "failed", **base, "pages_read": pages_read, "error": "time budget reached while reading the annual report"}
+            prefix = Path(tmp) / f"p{page}"
+            try:
+                subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", "110", "-gray", str(pdf), str(prefix)], check=True, capture_output=True, timeout=60)
+                image = next(Path(tmp).glob(f"p{page}*.pgm"))
+                text = subprocess.run(["tesseract", str(image), "-", "-l", language, "--psm", "6"], capture_output=True, text=True, timeout=60, env={**os.environ, "OMP_THREAD_LIMIT": "1"}).stdout
+                image.unlink(missing_ok=True)
+            except Exception:
+                continue
             pages_read += 1
             found = parse_workforce(text)
             if found:
-                return {"status": "available", "url": url, "sha256": digest, "retrieved_at": response.retrieved_at, "year": year, "page": page, "pages_read": pages_read, "ocr_seconds": round(time.monotonic() - started, 1), **found}
+                return {"status": "available", **base, "page": page, "pages_read": pages_read, "ocr_seconds": round(time.monotonic() - started, 1), **found}
             if STOP_RE.search(text):
                 break
-    return {"status": "not_available", "url": url, "sha256": digest, "retrieved_at": response.retrieved_at, "year": year, "pages_read": pages_read, "error": "no workforce statement found in the filing copy"}
+    return {"status": "not_available", **base, "pages_read": pages_read, "error": "no workforce statement found in the filing copy"}
+
+
+def read_workforce(fetcher: Fetcher, org: str, year: str, *, language: str, max_pages: int = 14, min_seconds_left: float = 420) -> dict[str, Any]:
+    download = download_filing(fetcher, org, year, min_seconds_left=min_seconds_left)
+    if download["status"] != "downloaded":
+        return download
+    return ocr_filing(download, language=language, seconds_left=fetcher.seconds_left, max_pages=max_pages)
+
+
+class FilingPipeline:
+    """Background pipeline: one paced downloader feeds parallel OCR workers.
+
+    Research workers enqueue companies as soon as their registry record is known, so
+    the ~30/minute filing endpoint never stalls website or registry research.
+    """
+
+    def __init__(self, fetcher: Fetcher, *, language: str, allowed: set[str], want_years: bool, years_fetcher=None) -> None:
+        import queue
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.fetcher = fetcher
+        self.language = language
+        self.allowed = allowed
+        self.want_years = want_years
+        self.years_fetcher = years_fetcher
+        self.queue: "queue.Queue[tuple[str, str | None] | None]" = queue.Queue()
+        self.results: dict[str, dict[str, Any]] = {}
+        self.ocr_pool = ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 2)))
+        self.futures: dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def submit(self, org: str, year: str | None) -> None:
+        self.queue.put((org, year))
+
+    def close(self) -> None:
+        self.queue.put(None)
+
+    def _store(self, org: str, key: str, value: Any) -> None:
+        with self._lock:
+            self.results.setdefault(org, {})[key] = value
+
+    def _run(self) -> None:
+        while True:
+            item = self.queue.get()
+            if item is None:
+                return
+            org, year = item
+            try:
+                if self.want_years and self.years_fetcher and self.fetcher.seconds_left() > 300:
+                    self._store(org, "years", self.years_fetcher(self.fetcher, org))
+                if org not in self.allowed or not year:
+                    continue
+                download = download_filing(self.fetcher, org, year)
+                if download["status"] != "downloaded":
+                    self._store(org, "workforce", download)
+                    continue
+                self.futures[org] = self.ocr_pool.submit(ocr_filing, download, language=self.language, seconds_left=self.fetcher.seconds_left)
+            except Exception as exc:  # never break the pipeline for one company
+                self._store(org, "workforce", {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:160]}"})
+
+    def finish(self, deadline_seconds_left: float = 45) -> None:
+        """Stop taking new downloads and collect OCR results while time allows."""
+        self.close()
+        self.thread.join(timeout=max(0.0, self.fetcher.seconds_left() - deadline_seconds_left))
+        for org, future in list(self.futures.items()):
+            remaining = self.fetcher.seconds_left() - deadline_seconds_left
+            try:
+                self._store(org, "workforce", future.result(timeout=max(0.1, remaining)))
+            except Exception as exc:
+                self._store(org, "workforce", {"status": "failed", "error": "time budget reached before the annual report was read" if remaining <= 0.1 else f"{type(exc).__name__}"})
+        self.ocr_pool.shutdown(wait=False, cancel_futures=True)
+
+    def get(self, org: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.results.get(org, {}))

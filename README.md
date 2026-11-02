@@ -42,9 +42,9 @@ Without `uv`, run `python -m venv .venv && .venv/bin/pip install . && .venv/bin/
 |---|---|---|
 | `--state-dir` | `state/` | Snapshots for refresh, plus the NAV feed cache |
 | `--previous` | — | Previous envelopes JSONL to refresh against (instead of `--state-dir`) |
-| `--max-requests` | 1900 | Hard cap on outbound HTTP requests. Requests for core official records are reserved before any optional source |
-| `--time-budget-minutes` | 25 | Hard wall-clock budget. Every company still gets an envelope if it runs out |
-| `--workers` | 12 | Companies researched in parallel |
+| `--max-requests` | 1,900 per 100 companies | Hard cap on outbound HTTP requests, scaled with the batch (19,000 for 1,000 companies). Requests for core official records are reserved before any optional source |
+| `--time-budget-minutes` | 42 | Hard wall-clock budget for the whole batch, under the 45-minute limit. Every company still gets an envelope if it runs out |
+| `--workers` | 24 | Companies researched in parallel |
 | `--expected-count` | — | Fail fast if the input count differs |
 
 ## Models, APIs, licences and cost

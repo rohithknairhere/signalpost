@@ -335,3 +335,24 @@ def test_glued_foreign_suffix_handle_rejected():
     pages = [page(html, url="https://whatevertheseason.com/"), page(html, url="https://whatevertheseason.com/about", kind="about")]
     facts = extract_facts(pages, ident, "whatevertheseason.com", ownership="own")
     assert [p["platform"] for p in facts["social_profiles"] if p["publishable"]] == ["instagram"]
+
+
+def test_norwegian_letter_domains_and_place_names():
+    from signalpost_agent.website import host_name_forms, name_domain_candidates
+
+    candidates = name_domain_candidates("Bjørn Løkken Rør AS")
+    assert "bjornlokkenror.no" in candidates and "bjoernloekkenroer.no" in candidates
+    assert any(item.startswith("xn--") for item in candidates)
+    assert name_domain_candidates("Ås Bygg AS")[0] == "asbygg.no"  # the place name Ås is kept
+    assert name_domain_candidates("AS Vinmonopolet")[0] == "vinmonopolet.no"
+    assert "bjornlokkenror" in host_name_forms("www.bjoernloekkenroer.no")
+
+
+def test_feed_news_is_dated_and_same_site():
+    from signalpost_agent.website import Page, extract_news
+
+    rss = ("<?xml version='1.0'?><rss><channel><item><title>Ny avdeling i Bergen</title><link>https://www.ex.no/ny/</link>"
+           "<pubDate>Tue, 09 Sep 2025 10:00:00 +0000</pubDate></item><item><title>Elsewhere</title><link>https://other.no/a</link>"
+           "<pubDate>Tue, 09 Sep 2025 10:00:00 +0000</pubDate></item><item><title>Undated</title><link>https://www.ex.no/u</link></item></channel></rss>")
+    news = extract_news([Page("https://www.ex.no/feed/", "feed", 200, "t", "h", raw=rss)], "ex.no")
+    assert [(item["date"], item["url"]) for item in news] == [("2025-09-09", "https://www.ex.no/ny/")]

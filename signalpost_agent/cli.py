@@ -26,7 +26,7 @@ from .jobs import NavJobIndex
 from .net import BudgetExhausted, Fetcher
 from .refresh import apply_refresh, load_previous, load_previous_jsonl
 from .registry import fetch_account_years, fetch_registry, load_bulk, normalize_subunits
-from .annual_report import ocr_available, read_workforce
+from .annual_report import FilingPipeline, ocr_available
 from .assemble import ALWAYS_FILE
 from .reviews import applies as reviews_applies, fetch_rating
 from .synthesis import synthesize
@@ -78,7 +78,7 @@ def plan_for(n: int, max_requests: int, *, has_bulk: bool = False, time_budget_s
     budget is tight; website depth, ratings and OCR shrink before anything core.
     """
     n = max(n, 1)
-    nav_pages = 200 if n <= 200 else 80 if n <= 600 else 30
+    nav_pages = max(20, min(200, int(0.12 * max_requests)))
     allowance = (max_requests - nav_pages - 30) / n
     live = [] if has_bulk and allowance < 12 else ["registry_live"]
     if allowance >= 12:
@@ -286,26 +286,31 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
         else:
             reviews_result = {"status": "failed", "error": "request budget reserved for core sources"}
 
-    workforce_result: dict[str, Any] | None = None
-    ocr_ok, ocr_lang = ctx["ocr"]
-    if ocr_ok and entity and len(org) == 9 and org in ctx["ocr_orgs"]:
+    # Annual-report copy (paced endpoint) is read by the background filing pipeline.
+    pipeline = ctx.get("pipeline")
+    workforce_hint: dict[str, Any] | None = None
+    if entity and len(org) == 9:
         year = str(entity.get("sisteInnsendteAarsregnskap") or "")
         form = str((entity.get("organisasjonsform") or {}).get("kode") or "")
-        if not year.isdigit():
-            workforce_result = {"status": "not_applicable" if form not in ALWAYS_FILE else "not_available", "reason": "no filed annual accounts registered"}
-        else:
-            if not fetcher.can_spend(1):
-                workforce_result = {"status": "failed", "error": "request budget reserved for core official records"}
-            else:
-                try:
-                    workforce_result = read_workforce(fetcher, org, year, language=ocr_lang)
-                except Exception as exc:
-                    errors.append({"stage": "annual_report", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
-                    workforce_result = {"status": "failed", "error": type(exc).__name__}
+        if pipeline is not None:
+            pipeline.submit(org, year if year.isdigit() else None)
+        if ctx["ocr"][0] and org in ctx["ocr_orgs"] and not year.isdigit():
+            workforce_hint = {"status": "not_applicable" if form not in ALWAYS_FILE else "not_available", "reason": "no filed annual accounts registered"}
+    return {"org": org, "bulk_entity": bulk_entity, "registry": registry, "website": website, "jobs": jobs, "reviews": reviews_result,
+            "workforce_hint": workforce_hint, "previous": previous, "errors": errors, "started": started, "used_before": used_before}
 
-    if plan["years"] and len(org) == 9 and fetcher.seconds_left() > 120:
-        # Rate-limited endpoint (~30/min): read last so it never delays the other sources.
-        registry["financial_history"] = fetch_account_years(fetcher, org)
+
+def finalize_company(state: dict[str, Any], ctx: dict[str, Any], paced: dict[str, Any]) -> dict[str, Any]:
+    fetcher: Fetcher = ctx["fetcher"]
+    run = ctx["run"]
+    org = state["org"]
+    bulk_entity, registry, website, jobs = state["bulk_entity"], dict(state["registry"]), state["website"], state["jobs"]
+    reviews_result, previous, errors, started, used_before = state["reviews"], state["previous"], state["errors"], state["started"], state["used_before"]
+    if paced.get("years"):
+        registry["financial_history"] = paced["years"]
+    workforce_result = state.get("workforce_hint")
+    if workforce_result is None and ctx["ocr"][0] and org in ctx["ocr_orgs"]:
+        workforce_result = paced.get("workforce") or {"status": "failed", "error": "time budget reached before the annual report was read"}
     bulk_meta = {"sha256": ctx["bulk_meta"].get("sha256"), "retrieved_at": ctx["bulk_meta"].get("loaded_at"), "source_url": ctx["bulk_meta"].get("source_url")}
     profile = build_profile(org, bulk_entity, bulk_meta, registry, website, jobs, run["started_at"], wikidata=ctx["wikidata"].get(org), wikidata_status=ctx["wikidata_status"], reviews=reviews_result, workforce=workforce_result)
     profile = apply_refresh(profile, previous, run["run_id"], run["started_at"])
@@ -369,9 +374,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-count", type=int, default=None, help="fail fast if the input does not contain exactly this many companies")
     parser.add_argument("--previous", help="previous envelopes JSONL to refresh against (optional; --state-dir is used otherwise)")
     parser.add_argument("--state-dir", default="state", help="where snapshots and caches persist between runs")
-    parser.add_argument("--max-requests", type=int, default=int(os.environ.get("SIGNALPOST_MAX_REQUESTS", 1900)))
-    parser.add_argument("--time-budget-minutes", type=float, default=float(os.environ.get("SIGNALPOST_TIME_BUDGET_MINUTES", 25)))
-    parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument("--max-requests", type=int, default=int(os.environ["SIGNALPOST_MAX_REQUESTS"]) if os.environ.get("SIGNALPOST_MAX_REQUESTS") else None,
+                        help="total request cap (default: 1,900 per 100 companies, i.e. under the 2,000-per-100 limit)")
+    parser.add_argument("--time-budget-minutes", type=float, default=float(os.environ["SIGNALPOST_TIME_BUDGET_MINUTES"]) if os.environ.get("SIGNALPOST_TIME_BUDGET_MINUTES") else None,
+                        help="wall-clock budget for the whole run (default: 42 minutes, under 45 for any batch size)")
+    parser.add_argument("--workers", type=int, default=int(os.environ.get("SIGNALPOST_WORKERS", 24)))
     parser.add_argument("--viewer", default=None, help="write the static viewer here (default: <output dir>/site/index.html)")
     parser.add_argument("--no-viewer", action="store_true")
     parser.add_argument("--web-data", default=None, help="also write the dataset for the web app (e.g. public/data/profiles.json)")
@@ -394,6 +401,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.expected_count is not None and len(orgs) != args.expected_count:
         print(f"Expected {args.expected_count} organisations, received {len(orgs)}", file=sys.stderr)
         return 2
+    if args.max_requests is None:
+        # The limit is per 100 companies: scale with the batch instead of squeezing a large batch into 1,900.
+        args.max_requests = max(400, int(1900 * len(orgs) / 100))
+    if args.time_budget_minutes is None:
+        # Finish well inside 45 minutes whatever the batch size; slow optional work is sized to fit.
+        args.time_budget_minutes = 42.0
     deadline = wall_start + args.time_budget_minutes * 60
     fetcher = Fetcher(max_requests=args.max_requests, deadline_monotonic=deadline)
     bulk, bulk_meta = load_bulk(args.bulk, orgs)
@@ -442,6 +455,11 @@ def main(argv: list[str] | None = None) -> int:
     # companies not yet started need for their core official records.
     fetcher.reserve_fn = lambda: int(pending["count"] * core_cost * 1.05) + 10
     ctx["start_company"] = start_company
+    pipeline = None
+    if ocr[0] or plan["years"]:
+        pipeline = FilingPipeline(fetcher, language=ocr[1], allowed=ocr_orgs if ocr[0] else set(), want_years=plan["years"], years_fetcher=fetch_account_years)
+    ctx["pipeline"] = pipeline
+    gathered: dict[str, dict[str, Any]] = {}
     pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
     futures = {pool.submit(research_company, org, ctx): org for org in orgs}
     timed_out = False
@@ -450,17 +468,29 @@ def main(argv: list[str] | None = None) -> int:
         for index, future in enumerate(as_completed(futures, timeout=max(30.0, deadline - time.monotonic() + 60)), 1):
             org = futures[future]
             try:
-                results[org] = future.result()
+                value = future.result()
+                if value.get("org") == org and "families" not in value:
+                    gathered[org] = value
+                else:
+                    results[org] = value
             except Exception as exc:
                 traceback.print_exc()
                 results[org] = failed_envelope(org, run, f"{type(exc).__name__}: {str(exc)[:200]}")
             if index % args.checkpoint_every == 0:
                 print(f"[signalpost] {index}/{len(orgs)} done, {fetcher.used} requests, {int(time.monotonic() - wall_start)}s", file=sys.stderr)
-                write_jsonl(output.with_suffix(".partial.jsonl"), [results[o] for o in orgs if o in results])
     except FuturesTimeout:
         timed_out = True
         print("[signalpost] time budget reached; unfinished companies are reported as failed", file=sys.stderr)
     pool.shutdown(wait=not timed_out, cancel_futures=True)
+    if pipeline is not None:
+        print(f"[signalpost] research done in {int(time.monotonic() - wall_start)}s; collecting annual-report reads", file=sys.stderr)
+        pipeline.finish()
+    for org, state in gathered.items():
+        try:
+            results[org] = finalize_company(state, ctx, pipeline.get(org) if pipeline is not None else {})
+        except Exception as exc:
+            traceback.print_exc()
+            results[org] = failed_envelope(org, run, f"{type(exc).__name__}: {str(exc)[:200]}")
 
     completed_at = utc_now()
     envelopes = [results.get(org) or failed_envelope(org, run, "time budget reached before this company finished" if timed_out else "missing result") for org in orgs]

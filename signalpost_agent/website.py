@@ -130,9 +130,38 @@ def email_domain(email: str | None) -> str | None:
     return domain
 
 
+def host_name_forms(host: str) -> set[str]:
+    """The domain label as comparable letters: IDN decoded, and aa/oe spellings folded."""
+    label = registered_domain(host).split(".")[0] if host else ""
+    if label.startswith("xn--"):
+        try:
+            label = label.encode().decode("idna")
+        except UnicodeError:
+            pass
+    base = re.sub(r"[^a-z0-9]", "", ascii_fold(label))
+    forms = {base}
+    if "aa" in base or "oe" in base:
+        forms.add(base.replace("aa", "a").replace("oe", "o"))
+    return {form for form in forms if form}
+
+
+LEGAL_TOKENS = {"as", "asa", "ans", "da", "sa", "nuf", "enk", "ba", "ltd", "ab", "aps", "gmbh"}
+
+
+def _strip_legal(words: list[str]) -> list[str]:
+    """Drop legal-form words at the ends of a name (\"Ås Bygg AS\" keeps the place name)."""
+    words = list(words)
+    while words and words[-1] in LEGAL_TOKENS:
+        words.pop()
+    while len(words) > 1 and words[0] in LEGAL_TOKENS - {"as"}:
+        words.pop(0)
+    return [w for w in words if w not in {"a", "s"} or len(words) == 1]
+
+
 def name_domain_candidates(name: str, limit: int = 7) -> list[str]:
+    name = re.sub(r"^\s*(AS|ASA|A/S)\s+", "", name or "")  # "AS Vinmonopolet" (legal form first, upper case)
     folded = re.sub(r"\ba\s*/\s*s\b", " ", ascii_fold(name), flags=re.I)
-    raw = [token for token in tokens(folded.replace("&", " ")) if token not in {"as", "asa", "ans", "da", "sa", "nuf", "enk", "ba"}]
+    raw = _strip_legal(tokens(folded.replace("&", " ")))
     if not raw:
         return []
     variants: list[str] = []
@@ -145,6 +174,19 @@ def name_domain_candidates(name: str, limit: int = 7) -> list[str]:
     out = []
     for stem in variants:
         out.append(stem + ".no")
+    if re.search(r"[æøåÆØÅ]", name or ""):
+        # Norwegian letters: owners register either the aa/oe spelling or the IDN form (e.g. xn--...).
+        words = _strip_legal(re.findall(r"[a-z0-9æøå]+", re.sub(r"\ba\s*/\s*s\b", " ", (name or "").casefold())))
+        alt = "".join(words).translate(str.maketrans({"ø": "oe", "å": "aa", "æ": "ae"}))
+        if 3 <= len(alt) <= 40 and alt + ".no" not in out:
+            out.append(alt + ".no")
+        native = "".join(words)
+        try:
+            idn = native.encode("idna").decode() if 3 <= len(native) <= 40 else ""
+        except UnicodeError:
+            idn = ""
+        if idn.startswith("xn--"):
+            out.append(idn + ".no")
     if variants and len(variants[0]) <= 30:
         out.append(variants[0] + "as.no")  # e.g. brandmakeras.no
     for stem in variants:
@@ -394,8 +436,7 @@ def assess(identity: Identity, pages: list[Page], source: str, host: str, ignore
     elif any(re.search(r"(?<!\d)" + re.escape(code) + r"\s+" + re.escape(place), folded) for code, place in identity.postal_places):
         signals.append("registry_postal_place_on_site")
     distinct = distinctive_tokens(identity.name) or [t for t in name_tokens(identity.name) if len(t) > 2]
-    host_compact = re.sub(r"[^a-z0-9]", "", registered_domain(host).split(".")[0] if host else "")
-    domain_matches_name = bool(distinct) and all(token in host_compact for token in distinct) and len("".join(distinct)) >= 3
+    domain_matches_name = bool(distinct) and len("".join(distinct)) >= 3 and any(all(token in form for token in distinct) for form in host_name_forms(host))
     if domain_matches_name:
         signals.append("domain_matches_name")
     corroborators = {"registry_phone_on_site", "registry_email_on_site", "registry_address_on_site", "registry_postal_place_on_site"} & set(signals)
@@ -610,6 +651,15 @@ def _research_one(fetcher: Fetcher, identity: Identity, url: str, source: str, *
         if ownership == "group":
             # A parent group's or sister company's site: not this company's own website.
             verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + ["group_or_parent_site"], "related_entities": related}
+    if verdict["verdict"] == "exact" and ownership == "own" and fetcher.can_spend(2):
+        feed_url = _feed_url(home, domain)
+        if feed_url:
+            try:
+                feed = _fetch_page(fetcher, feed_url, "feed")
+            except BudgetExhausted:
+                feed = None
+            if feed is not None and feed.raw and _same_site(feed.url, domain):
+                pages.append(feed)
     result = {"url": url, "final_url": home.url, "domain": domain, "source": source, **verdict}
     if verdict["verdict"] == "exact":
         result["ownership"] = ownership
@@ -689,6 +739,8 @@ def _page_record(page: Page) -> dict[str, Any]:
 # ---------------------------------------------------------------- extraction
 
 def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership: str = "own") -> dict[str, Any]:
+    feeds = [page for page in pages if page.kind == "feed"]
+    pages = [page for page in pages if page.kind != "feed"]  # feeds hold article text, not company facts
     home = pages[0]
     socials: dict[tuple[str, str], dict[str, Any]] = {}
     jsonld_orgs: list[dict[str, Any]] = []
@@ -729,13 +781,12 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership:
     by_platform: dict[str, list[dict[str, Any]]] = {}
     for entry in socials.values():
         handle_compact = re.sub(r"[^a-z0-9]", "", ascii_fold(entry["handle"]))
-        domain_stem = re.sub(r"[^a-z0-9]", "", domain.split(".")[0])
         brand_compact = re.sub(r"[^a-z0-9]", "", ascii_fold(brand_hint))
         # Every distinctive word of the legal name must appear (a 6-letter stem is enough), so
         # sister brands ("friheimtrainingcenter" for Friheim Akademiet) and shared industry words do not match.
         name_match = bool(distinct) and (name_compact in handle_compact or all(token[:6] in handle_compact for token in distinct))
         # The site's brand name (og:site_name) is not used: chains and franchises brand member sites.
-        site_match = len(domain_stem) >= 4 and domain_stem in handle_compact
+        site_match = any(len(form) >= 4 and form in handle_compact for form in host_name_forms(domain))
         # On a site that is not unambiguously the company's own, a profile must carry the company's own name.
         # Profiles are only taken from the company's own site; a shared or group-wide site's
         # accounts usually belong to the group or brand, not to this legal entity.
@@ -805,7 +856,7 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership:
     own_site = ownership == "own"
     # News, jobs and careers pages are only taken from the company's own site, never a shared or brand site.
     careers = next((page for page in pages if page.kind == "careers" and page.text), None) if own_site else None
-    news = extract_news(pages, domain) if own_site else []
+    news = extract_news(pages + feeds, domain) if own_site else []
     job_postings = extract_job_postings(pages, domain) if own_site else []
     founding = next((str(node.get("foundingDate")) for node in jsonld_orgs if node.get("foundingDate")), None)
     return {
@@ -867,10 +918,69 @@ def extract_job_postings(pages: list[Page], domain: str, limit: int = 15) -> lis
     return sorted(found.values(), key=lambda item: item.get("date_posted") or "", reverse=True)[:limit]
 
 
+FEED_TYPES = ("application/rss+xml", "application/atom+xml")
+
+
+def _feed_url(home: Page, domain: str) -> str | None:
+    """The site's own news feed: declared with <link rel=alternate>, or WordPress's standard /feed/."""
+    if home.soup is not None:
+        for tag in home.soup.select("link[rel~=alternate][href]"):
+            kind = str(tag.get("type") or "").lower()
+            href = urllib.parse.urljoin(home.url, str(tag.get("href")))
+            if kind in FEED_TYPES and "comment" not in href.lower() and _same_site(href, domain):
+                return href
+    if "wp-content/" in home.raw or "wp-json" in home.raw:
+        return urllib.parse.urljoin(home.url, "/feed/")
+    return None
+
+
+def _feed_items(page: Page) -> list[dict[str, Any]]:
+    """Dated items from an RSS 2.0 or Atom feed (parsed as XML, never executed)."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    try:
+        root = ET.fromstring(page.raw.encode("utf-8", "ignore"))
+    except ET.ParseError:
+        return []
+    out = []
+    for node in root.iter():
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag not in {"item", "entry"}:
+            continue
+        fields = {child.tag.rsplit("}", 1)[-1]: child for child in node}
+        title = clean_text((fields.get("title").text if fields.get("title") is not None else "") or "", 200)
+        link_node = fields.get("link")
+        link = ""
+        if link_node is not None:
+            link = (link_node.text or "").strip() or str(link_node.get("href") or "")
+        raw_date = ""
+        for key in ("pubDate", "published", "updated", "date"):
+            if fields.get(key) is not None and (fields[key].text or "").strip():
+                raw_date = fields[key].text.strip()
+                break
+        published = None
+        if re.match(r"\d{4}-\d{2}-\d{2}", raw_date):
+            published = raw_date[:10]
+        elif raw_date:
+            try:
+                published = parsedate_to_datetime(raw_date).date().isoformat()
+            except (TypeError, ValueError, IndexError):
+                published = None
+        if title and link and published:
+            out.append({"title": title, "date": published, "url": urllib.parse.urljoin(page.url, link)})
+    return out
+
+
 def extract_news(pages: list[Page], domain: str, limit: int = 8) -> list[dict[str, Any]]:
     items: dict[str, dict[str, Any]] = {}
     today_iso = date.today().isoformat()
     for page in pages:
+        if page.kind == "feed":
+            for item in _feed_items(page):
+                if "2015-01-01" <= item["date"] <= today_iso and _same_site(item["url"], domain):
+                    items.setdefault(item["url"], {**item, "found_on": page.url, "sha256": page.sha256, "retrieved_at": page.retrieved_at, "method": "feed"})
+            continue
         for node in _walk_jsonld(page.jsonld):
             if _jsonld_types(node) & {"NewsArticle", "BlogPosting", "Article", "PressRelease"}:
                 published = str(node.get("datePublished") or "")[:10]

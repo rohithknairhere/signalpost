@@ -281,7 +281,7 @@ def test_backs_off_after_too_many_requests():
     assert fetcher._back_off("slow.example.com", None, 429) == 10 and fetcher._back_off("slow.example.com", None, 429) == 20
 
 
-def test_industry_word_alone_does_not_match_and_country_sections_are_shared():
+def test_industry_word_alone_does_not_match_and_country_sections_are_group():
     from signalpost_agent.website import classify_ownership
 
     ident = build_identity("999999998", {**ENTITY, "navn": "LUCRA REGNSKAP AS"}, [])
@@ -291,7 +291,7 @@ def test_industry_word_alone_does_not_match_and_country_sections_are_shared():
     assert [p["url"] for p in facts["social_profiles"] if p["publishable"]] == ["https://www.facebook.com/lucraregnskap"]
     ident2 = build_identity("999999997", {**ENTITY, "navn": "SCANVAEGT SYSTEMS AS"}, [])
     section = page("<html><body>Scanvaegt Systems AS org.nr 999 999 997</body></html>", url="https://www.scanvaegt.com/no")
-    assert classify_ownership(ident2, [section], "scanvaegt.com", ["organisation_number_on_site", "legal_name_on_site"])[0] == "shared"
+    assert classify_ownership(ident2, [section], "scanvaegt.com", ["organisation_number_on_site", "legal_name_on_site"])[0] == "group"
 
 
 def test_chain_brand_profiles_not_published_for_member_company():
@@ -366,3 +366,20 @@ def test_own_name_inside_menu_text_is_not_a_related_company():
     assert classify_ownership(ident, [own], "wongravenwines.no", ["legal_name_on_site", "domain_matches_name"])[0] == "own"
     parent = page("<html><body>Wongraven Wines AS er en del av Wongraven Holding AS</body></html>", url="https://wongravenwines.no/")
     assert classify_ownership(ident, [parent], "wongravenwines.no", ["legal_name_on_site", "domain_matches_name"])[0] == "group"
+
+
+def test_parent_domains_holding_names_and_international_profiles():
+    from signalpost_agent.website import classify_ownership
+
+    ent = lambda name: build_identity("999999995", {**ENTITY, "navn": name}, [])
+    home = lambda url, text="": page(f"<html><body>{text}</body></html>", url=url)
+    corr = ["legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
+    assert classify_ownership(ent("OPSAHL EIENDOM AS"), [home("https://opsahlgruppen.no/")], "opsahlgruppen.no", corr + ["domain_matches_name"])[0] == "group"
+    assert classify_ownership(ent("PELLERIN HOLDING AS"), [home("https://pellerin.no/")], "pellerin.no", corr + ["domain_matches_name"])[0] == "group"
+    assert classify_ownership(ent("RØDØY-LURØY KRAFTVERK AS"), [home("https://www.sks.no/")], "sks.no", corr + ["organisation_number_on_site"], "registry_email_domain")[0] == "group"
+    assert classify_ownership(ent("INNVIK FRUKTLAGER SA"), [home("https://www.innvikfrukt.no/")], "innvikfrukt.no", corr, "registry_website")[0] == "own"
+    assert classify_ownership(ent("MØLLER BIL INNLANDET AS"), [home("https://mollerbil.no/forhandler/hamar")], "mollerbil.no", corr, "registry_website")[0] == "shared"
+    html = '<html><body><a href="https://www.linkedin.com/company/trescal">li</a><a href="https://www.facebook.com/trescalnorway">fb</a></body></html>'
+    pages = [page(html, url="https://trescal.no/"), page(html, url="https://trescal.no/om-oss", kind="about")]
+    facts = extract_facts(pages, ent("TRESCAL NORWAY AS"), "trescal.no", ownership="own")
+    assert [p["url"] for p in facts["social_profiles"] if p["publishable"]] == ["https://www.facebook.com/trescalnorway"]

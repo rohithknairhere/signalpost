@@ -66,6 +66,13 @@ SHARED_SERVICE_DOMAINS = {
     "wixsite.com", "squarespace.com", "webnode.com", "weebly.com", "blogspot.com", "wordpress.com", "github.io",
     "mittanbud.no", "fagfolkguiden.no", "purehelp.no", "brreg.no", "google.com", "sites.google.com",
 }
+COUNTRY_WORDS = ("norway", "norge", "noreg", "norden", "nordic", "scandinavia", "skandinavia")
+
+
+def site_match_country(domain: str, country: str) -> bool:
+    return country in re.sub(r"[^a-z0-9]", "", domain)
+
+
 GROUP_WORDS = ("gruppen", "group", "konsern", "konsernet", "holding", "alliansen", "kjeden", "nordic", "global", "international", "scandinavia", "worldwide", "europe")
 VENDOR_WORDS = ("themeforest", "themeisle", "elementor", "envato", "webdesign", "nettsider", "wixstudio", "squarespace", "wordpress", "godaddy", "webflow", "hostinger", "onecom", "domeneshop")
 FOREIGN_LEGAL_SUFFIXES = {"ab", "aps", "oy", "oyj", "gmbh", "ag", "ltd", "limited", "inc", "llc", "bv", "nv", "sarl", "sas", "srl", "spa", "plc", "corp", "group"}
@@ -647,10 +654,11 @@ def _research_one(fetcher: Fetcher, identity: Identity, url: str, source: str, *
         verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + ["redirected_to_unrelated_domain"]}
     ownership, related = ("", [])
     if verdict["verdict"] == "exact":
-        ownership, related = classify_ownership(identity, pages, domain, verdict["signals"])
-        if ownership == "group":
-            # A parent group's or sister company's site: not this company's own website.
-            verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + ["group_or_parent_site"], "related_entities": related}
+        ownership, related = classify_ownership(identity, pages, domain, verdict["signals"], source)
+        if ownership in {"group", "shared"}:
+            # A parent group's, sister company's or another organisation's site: not this company's own website.
+            flag = "group_or_parent_site" if ownership == "group" else "site_of_another_organisation"
+            verdict = {**verdict, "verdict": "ambiguous", "score": 0.6, "signals": verdict["signals"] + [flag], "related_entities": related}
     if verdict["verdict"] == "exact" and ownership == "own" and fetcher.can_spend(2):
         feed_url = _feed_url(home, domain)
         if feed_url:
@@ -673,7 +681,7 @@ LOCALE_SEGMENTS = {"no", "nb", "nn", "no-no", "nb-no", "no-nb", "nor", "norway",
 NORWEGIAN_OR_GENERIC_TLDS = {"no", "com", "net", "org", "io", "co", "as", "app", "eu", "biz", "info", "online", "site", "shop", "store", "tech", "cloud", "xyz", "me", "nu"}
 
 
-def classify_ownership(identity: Identity, pages: list[Page], domain: str, signals: list[str]) -> tuple[str, list[str]]:
+def classify_ownership(identity: Identity, pages: list[Page], domain: str, signals: list[str], source: str = "") -> tuple[str, list[str]]:
     """own: the company's own site; shared: its registry/e-mail site under another brand
     (publish the site, but only profiles named like the company, no news or jobs);
     group: a parent/group or sister company's site (publish nothing from it)."""
@@ -702,11 +710,23 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
     first_segment = urllib.parse.urlparse(pages[0].url).path.strip("/").split("/")[0].lower() if pages else ""
     localized_section = first_segment in LOCALE_SEGMENTS
     if localized_section and tld != "no" and "domain_matches_name" not in signals:
-        # e.g. scanvaegt.com/no: the Norwegian section of a multinational group site.
-        return "shared", related
+        # e.g. scanvaegt.com/no or citycon.com/no: the Norwegian section of a multinational group site.
+        return "group", related
+    own_words = set(tokens(identity.name))
+    label = re.sub(r"[^a-z0-9]", "", ascii_fold(domain.split(".")[0]))
+    if any(word in label for word in GROUP_WORDS) and not any(word in own_words for word in GROUP_WORDS):
+        # opsahlgruppen.no for Opsahl Eiendom AS: the group's site.
+        return "group", related
+    if own_words & {"holding", "holdings", "invest", "investering"} and not own_number:
+        # A holding company's name on its operating subsidiary's site (pellerin.no for Pellerin Holding AS).
+        return "group", related
+    host_hits = [token for token in distinct if len(token) >= 3 and any(token in form for form in host_name_forms(domain))]
     if own_number:
         if "domain_matches_name" in signals:
             return "own", related  # e.g. a parent's own site that lists its subsidiaries
+        if source == "registry_email_domain" and not host_hits:
+            # The company's e-mail is on its parent's or manager's domain (sks.no for a power-plant subsidiary).
+            return "group", related
         return ("group" if len(related) >= 3 else "own"), related
     if related:
         return "group", related
@@ -714,6 +734,14 @@ def classify_ownership(identity: Identity, pages: list[Page], domain: str, signa
         return "group", related  # e.g. a Swedish or Danish parent's site
     if "domain_matches_name" in signals:
         return "own", related
+    corroborators = {"registry_phone_on_site", "registry_email_on_site", "registry_address_on_site", "registry_postal_place_on_site"} & set(signals)
+    root = not urllib.parse.urlparse(pages[0].url).path.strip("/") if pages else False
+    if (source == "registry_website" and "legal_name_on_site" in signals and len(corroborators) >= 2 and root
+            and distinct and len(host_hits) * 2 >= len(distinct)):
+        # The registry-declared site, naming the company, with its contact details, under a shortened name
+        # (innvikfrukt.no for Innvik Fruktlager SA).
+        return "own", related
+    # A site under another organisation's name (property manager, sister brand, dealer page): not published.
     return "shared", related
 
 
@@ -804,6 +832,11 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership:
         own_words = set(tokens(identity.name))
         if any(word in handle_compact for word in GROUP_WORDS) and not any(word in own_words for word in GROUP_WORDS):
             # "midtbygggruppen" on Midt-Bygg AS's site is the parent group's account, not the company's.
+            entry["handle_matches_name"] = False
+            entry["methods"].discard("jsonld_sameAs")
+        country = next((word for word in COUNTRY_WORDS if word in own_words), None)
+        if country and not any(word in handle_compact for word in COUNTRY_WORDS) and not site_match_country(domain, country):
+            # "trescal" / "three60energy" for Trescal Norway AS: the international group's account.
             entry["handle_matches_name"] = False
             entry["methods"].discard("jsonld_sameAs")
         handle_parts = re.split(r"[^a-z0-9]+", ascii_fold(entry["handle"]))

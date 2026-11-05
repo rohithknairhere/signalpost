@@ -1,11 +1,12 @@
 'use client';
 import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import {Search,ArrowUpRight,ArrowRight,Moon,Sun,Check,SlidersHorizontal,ArrowLeft,ExternalLink,FileText,GitCompareArrows,X,ChevronLeft,ChevronRight,Plus,Quote,ShieldCheck} from 'lucide-react';
-import {families,human,status,findClaim,evidenceIds,safeUrl,sourceAnchor,comparison,validDataset,formatValue,plain,describeSource,niceDate,coverageCount,type Company,type Dataset,type Value,type Claim} from '@/lib/signalpost';
+import {families,human,status,findClaim,evidenceIds,safeUrl,sourceAnchor,comparison,formatValue,plain,describeSource,niceDate,type Company,type Value,type Claim,type IndexEntry,type Meta,type Availability} from '@/lib/signalpost';
 
 const B = process.env.NEXT_PUBLIC_BASE_PATH || '';
 export const logo = 'https://keystone.jboxai.com/project-assets/bvtpbeiegkxcvfpmod0f6yjf/id0k8z9cfjt3uxn1f9ak8kq2/5b2ede2f59b2c81b635fa939f792bf59b281aefefab6f3e2d62e115615357f83/5b2ede2f59b2c81b.svg';
 const period = (p: string) => { const m = /^(\d{4})-01-01\/(\d{4})-12-31$/.exec(p); return m && m[1] === m[2] ? `Financial year ${m[1]}` : `Period ${p}`; };
+const titleCase = (s: string) => s.toLocaleLowerCase('nb').replace(/(^|[\s-])(\p{L})/gu, (_, a: string, b: string) => a + b.toLocaleUpperCase('nb'));
 const spacedOrg = (n: string) => n.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3');
 
 /* ------------------------------------------------------------------ source panel */
@@ -83,6 +84,7 @@ export function Shell({children}: {children: ReactNode}) {
   const [dark, setDark] = useState(false);
   const [source, setSource] = useState<SourceRef>();
   const lastFocus = useRef<HTMLElement | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- theme is only known in the browser
   useEffect(() => { try { const d = localStorage.getItem('signalpost-theme'); setDark(d ? d === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches); } catch { /* storage unavailable */ } }, []);
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, [dark]);
   const openSource = useCallback((ref: SourceRef) => { lastFocus.current = document.activeElement as HTMLElement; setSource(ref); }, []);
@@ -147,39 +149,19 @@ export function Status({c, f, compact = false}: {c: Company; f: string; compact?
   return <span tabIndex={compact ? -1 : 0} className={`${compact ? 'dot' : 'status'} ${s.availability}`} aria-label={`${human(f)}: ${human(s.availability)}. ${s.reason}`} title={`${human(f)} · ${human(s.availability)}: ${s.reason}`}>{!compact && <><i/>{human(f)}<small>{human(s.availability)}</small></>}</span>;
 }
 
-/* ------------------------------------------------------------------ data loading */
+/* ------------------------------------------------------------------ app shell with snapshot details */
 
-export function DataApp({view, org}: {view: 'home' | 'company' | 'compare'; org?: string}) {
-  const [data, setData] = useState<Dataset>();
-  const [error, setError] = useState('');
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setError('');
-    fetch(B + '/data/profiles.json')
-      .then(r => { if (!r.ok) throw Error('The company snapshot could not be loaded.'); return r.json(); })
-      .then(d => { if (!validDataset(d)) throw Error('The company snapshot has an invalid structure.'); if (live) setData(d); })
-      .catch(e => { if (live) setError(e.message || 'The snapshot could not be read.'); });
-    return () => { live = false; };
-  }, [attempt]);
+export function DataApp({view, meta, index = [], company, total = 0}: {view: 'home' | 'company' | 'compare'; meta: Meta; index?: IndexEntry[]; company?: Company; total?: number}) {
   return (
     <Shell>
-      {error ? (
-        <main id="main" className="wrap empty"><FileText/><h1>Snapshot unavailable</h1><p>{error}</p><button onClick={() => setAttempt(attempt + 1)}>Try again</button><a href={B + '/'}>Return to directory</a></main>
-      ) : !data ? (
-        <main id="main" className="wrap empty" aria-live="polite"><p>Loading the company snapshot…</p></main>
-      ) : (
-        <>
-          {view === 'home' ? <Home data={data}/> : view === 'compare' ? <Compare data={data}/> : <Profile data={data} c={data.companies.find(c => c.organisation_number === org)}/>}
-          <div className="run wrap">
-            <span className="eyebrow">SNAPSHOT DETAILS</span>
-            <span>Run <code>{data.meta.run_id}</code></span>
-            <span>Completed {niceDate(data.meta.completed_at)}</span>
-            <span>{data.meta.input_count} companies · {data.meta.requests.toLocaleString('en-GB')} requests</span>
-            <span>{data.meta.agent}</span>
-          </div>
-        </>
-      )}
+      {view === 'home' ? <Home index={index}/> : view === 'compare' ? <Compare index={index}/> : <Profile c={company} total={total}/>}
+      <div className="run wrap">
+        <span className="eyebrow">SNAPSHOT DETAILS</span>
+        <span>Run <code>{meta.run_id}</code></span>
+        <span>Completed {niceDate(meta.completed_at)}</span>
+        <span>{meta.input_count} companies · {meta.requests.toLocaleString('en-GB')} requests</span>
+        <span>{meta.agent}</span>
+      </div>
     </Shell>
   );
 }
@@ -187,25 +169,15 @@ export function DataApp({view, org}: {view: 'home' | 'company' | 'compare'; org?
 /* ------------------------------------------------------------------ search helpers */
 
 const norm = (s: string) => s.toLocaleLowerCase('nb').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/ø/g, 'o').replace(/æ/g, 'ae').replace(/[^a-z0-9]/g, '');
-const industryOf = (c: Company) => plain('industry', findClaim(c, 'industry')?.value ?? null);
-const municipalityOf = (c: Company) => String(findClaim(c, 'municipality')?.value ?? '');
-const revenueOf = (c: Company) => { const v = findClaim(c, 'revenue')?.value; return v && typeof v === 'object' && !Array.isArray(v) && typeof v.amount === 'number' ? v.amount : -Infinity; };
-function haystack(c: Company) {
-  return norm([c.name, c.organisation_number, municipalityOf(c), industryOf(c), String(findClaim(c, 'chief_executive')?.value ?? ''), String(findClaim(c, 'website_domain')?.value ?? '')].join(' '));
-}
+const haystack = (e: IndexEntry) => norm([e.name, e.organisation_number, e.municipality, e.industry, e.ceo, e.domain].join(' '));
+const matches = (e: IndexEntry, q: string) => q.split(/\s+/).map(norm).filter(Boolean).every(t => haystack(e).includes(t));
 
 /* ------------------------------------------------------------------ directory */
 
 const filters = ['Verified website', 'Social profiles', 'Hiring', 'Customer ratings', 'Filed accounts', 'Has ambiguous matches'];
-function filterMatch(c: Company, f: string) {
-  if (f === 'Has ambiguous matches') return Object.values(c.families).some(s => s.availability === 'ambiguous');
-  if (f === 'Hiring') { const cl = findClaim(c, 'active_job_posting_count'); return !!cl && typeof cl.value === 'number' && cl.value > 0; }
-  if (f === 'Customer ratings') return !!findClaim(c, 'customer_rating');
-  const family = f === 'Verified website' ? 'official_website' : f === 'Social profiles' ? 'company_profiles' : 'annual_accounts';
-  return status(c, family).availability === 'available' && c.claims.some(x => x.family === family && x.value !== null && x.evidence_ids.length > 0);
-}
+const DOT_LABELS: Record<Availability, string> = {available: 'found', ambiguous: 'unproven', failed: 'failed', blocked: 'blocked', not_available: 'none found', not_applicable: 'not applicable'};
 
-function Home({data}: {data: Dataset}) {
+function Home({index}: {index: IndexEntry[]}) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState<string[]>([]);
   const [sort, setSort] = useState<'coverage' | 'name' | 'revenue'>('coverage');
@@ -213,6 +185,7 @@ function Home({data}: {data: Dataset}) {
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const p = new URLSearchParams(location.search);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from the URL after hydration
     if (p.get('q')) setQ(p.get('q') || '');
     try { const s = JSON.parse(sessionStorage.getItem('signalpost-compare') || '[]'); if (Array.isArray(s)) setSelected(s.filter((x: unknown) => typeof x === 'string').slice(0, 3)); } catch { /* ignore */ }
     const onKey = (e: KeyboardEvent) => { if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); searchRef.current?.focus(); } };
@@ -221,14 +194,22 @@ function Home({data}: {data: Dataset}) {
   }, []);
   useEffect(() => { try { sessionStorage.setItem('signalpost-compare', JSON.stringify(selected)); } catch { /* ignore */ } }, [selected]);
   const updateQuery = (value: string) => { setQ(value); const url = new URL(location.href); if (value) url.searchParams.set('q', value); else url.searchParams.delete('q'); history.replaceState(null, '', url); };
-  const index = useMemo(() => new Map(data.companies.map(c => [c.organisation_number, haystack(c)])), [data]);
+  const ranked = useMemo(() => [...index].sort((a, b) => b.coverage - a.coverage || a.name.localeCompare(b.name, 'nb')), [index]);
   const results = useMemo(() => {
-    const terms = q.split(/\s+/).map(norm).filter(Boolean);
-    const list = data.companies.filter(c => terms.every(t => index.get(c.organisation_number)!.includes(t)) && active.every(f => filterMatch(c, f)));
-    return list.sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name, 'nb') : sort === 'revenue' ? revenueOf(b) - revenueOf(a) : coverageCount(b) - coverageCount(a) || a.name.localeCompare(b.name, 'nb'));
-  }, [data, index, q, active, sort]);
+    const list = index.filter(e => matches(e, q) && active.every(f => e.flags.includes(f)));
+    return list.sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name, 'nb') : sort === 'revenue' ? (b.revenue ?? -Infinity) - (a.revenue ?? -Infinity) : b.coverage - a.coverage || a.name.localeCompare(b.name, 'nb'));
+  }, [index, q, active, sort]);
+  const examples = useMemo(() => {
+    const top = ranked[0];
+    const places = new Map<string, number>();
+    index.forEach(e => e.municipality && places.set(e.municipality, (places.get(e.municipality) || 0) + 1));
+    const place = [...places.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const other = ranked.find(e => e !== top && e.flags.includes('Verified website'));
+    return [top && {label: titleCase(top.name.replace(/\s+(AS|ASA|SA|DA)$/i, '')), q: top.name}, place && {label: titleCase(place), q: place}, other && {label: spacedOrg(other.organisation_number), q: other.organisation_number}].filter(Boolean) as {label: string; q: string}[];
+  }, [index, ranked]);
+  const exampleCompare = ranked.filter(e => e.flags.includes('Verified website')).slice(0, 2).map(e => e.organisation_number);
   const toggle = (org: string, on: boolean) => setSelected(on ? [...selected, org].slice(0, 3) : selected.filter(n => n !== org));
-  const byOrg = (o: string) => data.companies.find(c => c.organisation_number === o);
+  const byOrg = (o: string) => index.find(e => e.organisation_number === o);
   return (
     <main id="main" className="wrap">
       <section className="intro">
@@ -243,6 +224,11 @@ function Home({data}: {data: Dataset}) {
           <input id="search" ref={searchRef} type="search" autoComplete="off" value={q} onChange={e => updateQuery(e.target.value)} placeholder="Company, org. number, place or industry"/>
           {q ? <button className="text-button" onClick={() => updateQuery('')}>Clear</button> : <kbd className="desktop-only">/</kbd>}
         </div>
+        <div className="examples">
+          <span>Try</span>
+          {examples.map(x => <button key={x.q} className="example" onClick={() => updateQuery(x.q)}>{x.label}</button>)}
+          {exampleCompare.length === 2 && <a className="example-link" href={`${B}/compare/?orgs=${exampleCompare.join(',')}`}><GitCompareArrows size={14}/>See an example comparison</a>}
+        </div>
         <div className="filters">
           <span className="filter-label"><SlidersHorizontal size={14}/> Show only</span>
           {filters.map(f => <button key={f} aria-pressed={active.includes(f)} className={`chip ${active.includes(f) ? 'selected' : ''}`} onClick={() => setActive(active.includes(f) ? active.filter(x => x !== f) : [...active, f])}>{active.includes(f) && <Check size={12}/>} {f}</button>)}
@@ -250,7 +236,7 @@ function Home({data}: {data: Dataset}) {
         </div>
         <div className="list-heading">
           <div>
-            <h2 aria-live="polite">{results.length === data.companies.length ? 'All companies' : 'Matching companies'} <span>{results.length}</span></h2>
+            <h2 aria-live="polite">{results.length === index.length ? 'All companies' : 'Matching companies'} <span>{results.length}</span></h2>
             <p>Tick up to 3 companies to compare them side by side.</p>
           </div>
           <label className="sort">Sort by
@@ -263,24 +249,23 @@ function Home({data}: {data: Dataset}) {
         </div>
         <div className="table-head"><span>COMPANY</span><span>INDUSTRY · PLACE</span><span>WHAT WE FOUND</span></div>
         <div className="company-list">
-          {results.map(c => {
-            const on = selected.includes(c.organisation_number);
-            const n = coverageCount(c);
+          {results.map(e => {
+            const on = selected.includes(e.organisation_number);
             return (
-              <article className={`company-row ${on ? 'picked' : ''}`} key={c.organisation_number}>
+              <article className={`company-row ${on ? 'picked' : ''}`} key={e.organisation_number}>
                 <div className="company-name">
                   <label className="pick" title={on ? 'Remove from comparison' : 'Add to comparison'}>
-                    <input type="checkbox" aria-label={`Compare ${c.name}`} checked={on} disabled={selected.length === 3 && !on} onChange={e => toggle(c.organisation_number, e.target.checked)}/>
+                    <input type="checkbox" aria-label={`Compare ${e.name}`} checked={on} disabled={selected.length === 3 && !on} onChange={ev => toggle(e.organisation_number, ev.target.checked)}/>
                   </label>
                   <div>
-                    <a href={B + '/company/' + c.organisation_number + '/'}>{c.name}<ArrowUpRight size={15}/></a>
-                    <code>{spacedOrg(c.organisation_number)}</code>
+                    <a href={B + '/company/' + e.organisation_number + '/'}>{e.name}<ArrowUpRight size={15}/></a>
+                    <code>{spacedOrg(e.organisation_number)}</code>
                   </div>
                 </div>
-                <div className="municipality"><span className="industry">{industryOf(c).replace(/^[\d.]+\s*/, '') || '—'}</span><span>{municipalityOf(c) || '—'}</span></div>
-                <div className="coverage" aria-label={`${n} of ${families.length} kinds of information found`}>
-                  <span className="coverage-dots" aria-hidden="true">{families.map(f => <Status c={c} f={f} compact key={f}/>)}</span>
-                  <span className="coverage-text">{n}/{families.length}</span>
+                <div className="municipality"><span className="industry">{e.industry.replace(/^[\d.]+\s*/, '') || '—'}</span><span>{e.municipality || '—'}</span></div>
+                <div className="coverage" aria-label={`${e.coverage} of ${families.length} kinds of information found`}>
+                  <span className="coverage-dots" aria-hidden="true">{e.dots.map((d, i) => <span key={i} className={`dot ${d}`} title={`${human(families[i])}: ${DOT_LABELS[d]}`}/>)}</span>
+                  <span className="coverage-text">{e.coverage}/{families.length}</span>
                 </div>
               </article>
             );
@@ -288,7 +273,7 @@ function Home({data}: {data: Dataset}) {
         </div>
         {!results.length && <div className="empty"><Search/><h3>No matching companies</h3><p>Try part of the name, the 9-digit number, a place or an industry.</p><button onClick={() => { updateQuery(''); setActive([]); }}>Reset search</button></div>}
         <div className="list-foot">
-          <span>{results.length} of {data.companies.length} companies in this snapshot</span>
+          <span>{results.length} of {index.length} companies in this snapshot</span>
           <div className="legend"><span><i className="dot available"/>Found</span><span><i className="dot ambiguous"/>Unproven</span><span><i className="dot failed"/>Blocked / failed</span><span><i className="dot not_available"/>None / not applicable</span></div>
         </div>
       </section>
@@ -313,13 +298,12 @@ function Home({data}: {data: Dataset}) {
 
 /* ------------------------------------------------------------------ company picker */
 
-function CompanyPicker({data, exclude, onPick, label}: {data: Dataset; exclude: string[]; onPick: (org: string) => void; label: string}) {
+function CompanyPicker({index, exclude, onPick, label}: {index: IndexEntry[]; exclude: string[]; onPick: (org: string) => void; label: string}) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
-  const terms = q.split(/\s+/).map(norm).filter(Boolean);
-  const matches = data.companies
-    .filter(c => !exclude.includes(c.organisation_number) && terms.every(t => haystack(c).includes(t)))
-    .sort((a, b) => coverageCount(b) - coverageCount(a))
+  const found = index
+    .filter(e => !exclude.includes(e.organisation_number) && matches(e, q))
+    .sort((a, b) => b.coverage - a.coverage)
     .slice(0, 6);
   return (
     <div className="picker" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
@@ -329,8 +313,8 @@ function CompanyPicker({data, exclude, onPick, label}: {data: Dataset; exclude: 
       </div>
       {open && (
         <ul className="picker-list" role="listbox" aria-label="Matching companies">
-          {matches.map(c => <li key={c.organisation_number}><button type="button" role="option" aria-selected="false" onClick={() => { onPick(c.organisation_number); setQ(''); setOpen(false); }}><strong>{c.name}</strong><small>{spacedOrg(c.organisation_number)} · {municipalityOf(c) || '—'}</small></button></li>)}
-          {!matches.length && <li className="none">No matching company</li>}
+          {found.map(e => <li key={e.organisation_number}><button type="button" role="option" aria-selected="false" onClick={() => { onPick(e.organisation_number); setQ(''); setOpen(false); }}><strong>{e.name}</strong><small>{spacedOrg(e.organisation_number)} · {e.municipality || '—'}</small></button></li>)}
+          {!found.length && <li className="none">No matching company</li>}
         </ul>
       )}
     </div>
@@ -339,13 +323,35 @@ function CompanyPicker({data, exclude, onPick, label}: {data: Dataset; exclude: 
 
 /* ------------------------------------------------------------------ compare */
 
-function Compare({data}: {data: Dataset}) {
+const companyCache = new Map<string, Promise<Company>>();
+function fetchCompany(org: string) {
+  if (!companyCache.has(org)) {
+    companyCache.set(org, fetch(`${B}/data/company/${org}`).then(r => { if (!r.ok) throw Error(`Could not load ${org}`); return r.json() as Promise<Company>; }));
+  }
+  return companyCache.get(org)!;
+}
+
+function Compare({index}: {index: IndexEntry[]}) {
   const [orgs, setOrgs] = useState<string[]>([]);
+  const [ready, setReady] = useState(false);
+  const [loaded, setLoaded] = useState<Record<string, Company>>({});
+  const [failed, setFailed] = useState('');
   const [onlyDiff, setOnlyDiff] = useState(false);
-  useEffect(() => { setOrgs([...new Set((new URLSearchParams(location.search).get('orgs') || '').split(',').filter(Boolean))]); }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from the URL after hydration
+  useEffect(() => { setOrgs([...new Set((new URLSearchParams(location.search).get('orgs') || '').split(',').filter(Boolean))]); setReady(true); }, []);
+  const known = orgs.filter(o => index.some(e => e.organisation_number === o)).slice(0, 3);
+  const invalid = orgs.filter(n => !index.some(e => e.organisation_number === n));
+  useEffect(() => {
+    let live = true;
+    known.filter(o => !loaded[o]).forEach(o => fetchCompany(o)
+      .then(c => { if (live) setLoaded(prev => ({...prev, [o]: c})); })
+      .catch(e => { if (live) setFailed(e.message); }));
+    return () => { live = false; };
+  }, [known.join(','), loaded]); // eslint-disable-line react-hooks/exhaustive-deps
   const update = (next: string[]) => { setOrgs(next); const url = new URL(location.href); if (next.length) url.searchParams.set('orgs', next.join(',')); else url.searchParams.delete('orgs'); history.replaceState(null, '', url); };
-  const selected = orgs.slice(0, 3).map(n => data.companies.find(c => c.organisation_number === n)).filter((c): c is Company => !!c);
-  const invalid = orgs.filter(n => !data.companies.some(c => c.organisation_number === n));
+  const selected = known.map(o => loaded[o]).filter((c): c is Company => !!c);
+  const waiting = known.length > selected.length && !failed;
+  const nameOf = (o: string) => index.find(e => e.organisation_number === o)?.name || o;
   const rows = comparison.map(([label, f, aliases]) => {
     const claims = selected.map(c => findClaim(c, ...aliases));
     const texts = claims.map(cl => cl ? plain(cl.field, cl.value) : '');
@@ -359,15 +365,20 @@ function Compare({data}: {data: Dataset}) {
       <h1>Compare companies.</h1>
       <p className="lead">The same questions for each company, with the source behind every answer.</p>
       {invalid.length > 0 && <p role="alert" className="panel">Not in this snapshot: {invalid.join(', ')}.</p>}
+      {failed && <p role="alert" className="panel">{failed}. <button className="text-button" onClick={() => { companyCache.clear(); setFailed(''); setLoaded({}); }}>Try again</button></p>}
       <div className="compare-controls">
         <div className="compare-chips">
-          {selected.map(c => <span className="tray-chip" key={c.organisation_number}>{c.name}<button aria-label={`Remove ${c.name}`} onClick={() => update(orgs.filter(o => o !== c.organisation_number))}><X size={13}/></button></span>)}
+          {known.map(o => <span className="tray-chip" key={o}>{nameOf(o)}<button aria-label={`Remove ${nameOf(o)}`} onClick={() => update(orgs.filter(x => x !== o))}><X size={13}/></button></span>)}
         </div>
-        {selected.length < 3 && <CompanyPicker data={data} exclude={orgs} onPick={o => update([...orgs.filter(x => data.companies.some(c => c.organisation_number === x)), o].slice(0, 3))} label={selected.length ? 'Add a company to compare' : 'Search for a company to compare'}/>}
+        {known.length < 3 && <CompanyPicker index={index} exclude={orgs} onPick={o => update([...known, o].slice(0, 3))} label={known.length ? 'Add a company to compare' : 'Search for a company to compare'}/>}
         {selected.length > 1 && <label className="toggle"><input type="checkbox" checked={onlyDiff} onChange={e => setOnlyDiff(e.target.checked)}/> Only show differences</label>}
       </div>
-      {!selected.length ? (
+      {!ready ? (
+        <p className="empty" aria-live="polite">Loading the comparison…</p>
+      ) : !known.length ? (
         <div className="empty"><GitCompareArrows/><h2>Pick two or three companies</h2><p>Search above, or tick companies in the directory.</p><a className="button" href={B + '/'}>Browse companies <ArrowRight size={16}/></a></div>
+      ) : waiting ? (
+        <p className="empty" aria-live="polite">Loading {known.length} {known.length === 1 ? 'company' : 'companies'}…</p>
       ) : (
         <>
           <div className="compare-heads" aria-hidden="true">{selected.map(c => <a key={c.organisation_number} href={B + '/company/' + c.organisation_number + '/'}>{c.name}</a>)}</div>
@@ -406,14 +417,13 @@ const KEY_FACTS: [string, string, string[]][] = [
   ['Equity', 'annual_accounts', ['equity']],
 ];
 
-function Profile({data, c}: {data: Dataset; c?: Company}) {
+function Profile({c, total}: {c?: Company; total: number}) {
   useEffect(() => { if (location.hash) { const el = document.getElementById(decodeURIComponent(location.hash.slice(1))); el?.scrollIntoView(); el?.focus(); } }, [c]);
   const open = useContext(SourceContext);
   if (!c) return <main id="main" className="wrap empty"><h1>Company not in this snapshot</h1><p>Check the organisation number or choose a company from the directory.</p><a className="button" href={B + '/'}>Back to directory</a></main>;
   const keys = [...new Set([...families, ...Object.keys(c.families), ...c.claims.map(x => x.family), ...c.synthesis.unknowns.map(x => x.family)])];
   const changes = c.changes.filter(x => x.material);
   const ids = evidenceIds(c);
-  const others = data.companies.length;
   return (
     <main id="main" className="wrap profile">
       <a className="back" href={B + '/'}><ArrowLeft size={14}/>Company directory</a>
@@ -491,7 +501,7 @@ function Profile({data, c}: {data: Dataset; c?: Company}) {
           </section>
         </div>
       </div>
-      <p className="reason">One of {others} companies in this snapshot.</p>
+      <p className="reason">One of {total} companies in this snapshot.</p>
     </main>
   );
 }

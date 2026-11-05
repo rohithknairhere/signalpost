@@ -59,3 +59,21 @@ export function describeSource(e:Evidence):{publisher:string;kind:string;human?:
 
 /** How much the snapshot found for a company (families with available facts). */
 export const coverageCount=(c:Company)=>families.filter(f=>status(c,f).availability==='available').length;
+
+/** Light directory entry: enough to search, filter, sort and pick, without the full evidence. */
+export type IndexEntry = {organisation_number:string;name:string;municipality:string;industry:string;ceo:string;domain:string;revenue:number|null;coverage:number;dots:Availability[];flags:string[]};
+export type Meta = Dataset['meta'];
+
+export function toIndexEntry(c:Company):IndexEntry{
+  const v=(...f:string[])=>findClaim(c,...f)?.value??null;
+  const rev=v('revenue');
+  const flags:string[]=[];
+  const has=(family:string)=>status(c,family).availability==='available'&&c.claims.some(x=>x.family===family&&x.value!==null&&x.evidence_ids.length>0);
+  if(has('official_website'))flags.push('Verified website');
+  if(has('company_profiles'))flags.push('Social profiles');
+  const jobs=v('active_job_posting_count');if(typeof jobs==='number'&&jobs>0)flags.push('Hiring');
+  if(findClaim(c,'customer_rating'))flags.push('Customer ratings');
+  if(has('annual_accounts'))flags.push('Filed accounts');
+  if(Object.values(c.families).some(s=>s.availability==='ambiguous'))flags.push('Has ambiguous matches');
+  return {organisation_number:c.organisation_number,name:c.name,municipality:String(v('municipality')??''),industry:plain('industry',v('industry')),ceo:String(v('chief_executive')??''),domain:String(v('website_domain')??''),revenue:rev&&typeof rev==='object'&&!Array.isArray(rev)&&typeof rev.amount==='number'?rev.amount:null,coverage:coverageCount(c),dots:families.map(f=>status(c,f).availability),flags};
+}

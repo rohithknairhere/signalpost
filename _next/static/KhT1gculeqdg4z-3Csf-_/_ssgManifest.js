@@ -1,0 +1,1 @@
+self.__SSG_MANIFEST=new Set(["\u002Fcompany\u002F[orgnr]","\u002Fdata\u002Fcompany\u002F[org]"]);self.__SSG_MANIFEST_CB&&self.__SSG_MANIFEST_CB()

@@ -14,8 +14,8 @@ export async function generateMetadata({params}: {params: Promise<{orgnr: string
   return {
     title: `${c.name} (${c.organisation_number})`,
     description,
-    openGraph: {title: `${c.name} · Signalpost`, description, type: 'article'},
-    twitter: {card: 'summary', title: `${c.name} · Signalpost`, description},
+    openGraph: {title: `${c.name} | Signalpost`, description, type: 'article'},
+    twitter: {card: 'summary', title: `${c.name} | Signalpost`, description},
   };
 }
 

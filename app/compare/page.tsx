@@ -5,7 +5,7 @@ import {loadDataset, loadIndex} from '@/lib/data-server';
 export const metadata: Metadata = {
   title: 'Compare companies',
   description: 'Compare Norwegian companies side by side, with the source behind every answer.',
-  openGraph: {title: 'Compare companies · Signalpost', description: 'Compare Norwegian companies side by side, with the source behind every answer.'},
+  openGraph: {title: 'Compare companies | Signalpost', description: 'Compare Norwegian companies side by side, with the source behind every answer.'},
 };
 
 export default function Page() {

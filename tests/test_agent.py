@@ -425,3 +425,20 @@ def test_english_as_is_not_a_legal_form_and_renamed_companies_need_their_number(
     assert result["verdict"] == "ambiguous" and "renamed_company_needs_organisation_number" in result["signals"]
     numbered = page("<html><body>Crownstead AS · org.nr 926 734 377</body></html>", url="https://crownstead.no/")
     assert assess(renamed, [numbered], "name_derived", "crownstead.no")["verdict"] == "exact"
+
+
+def test_sitemap_articles_and_job_pages_from_own_site():
+    from datetime import date, timedelta
+    from signalpost_agent.website import Page, _sitemap_entries, extract_job_postings, extract_news
+
+    sm = Page("https://www.ex.no/sitemap.xml", "sitemap", 200, "t", "h", raw="<?xml version='1.0'?><urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'><url><loc>https://www.ex.no/nyheter/ny-avdeling</loc><lastmod>2025-09-10</lastmod></url><url><loc>https://www.ex.no/om-oss</loc></url></urlset>")
+    assert _sitemap_entries(sm)[1][0] == ("https://www.ex.no/nyheter/ny-avdeling", "2025-09-10")
+    art_html = "<html><head><meta property='og:title' content='Ny avdeling i Bergen'><meta property='article:published_time' content='2025-09-09T10:00:00+02:00'></head><body><h1>Ny avdeling</h1></body></html>"
+    art = page(art_html, url="https://www.ex.no/nyheter/ny-avdeling", kind="article")
+    assert [(i["title"], i["date"]) for i in extract_news([art], "ex.no")] == [("Ny avdeling i Bergen", "2025-09-09")]
+    undated = page("<html><head><meta property='og:title' content='Om oss'></head><body><h1>Om oss</h1></body></html>", url="https://www.ex.no/nyheter/x", kind="article")
+    assert extract_news([undated], "ex.no") == []
+    ahead = (date.today() + timedelta(days=20)).strftime("%d.%m.%Y")
+    job = page(f"<html><body><h1>Elektriker</h1><p>Søknadsfrist: {ahead}</p></body></html>", url="https://www.ex.no/stillinger/elektriker-bergen", kind="job")
+    closed = page("<html><body><h1>Lærling</h1><p>Søknadsfrist: 01.01.2020</p></body></html>", url="https://www.ex.no/stillinger/laerling-2020", kind="job")
+    assert [j["title"] for j in extract_job_postings([job, closed], "ex.no")] == ["Elektriker"]

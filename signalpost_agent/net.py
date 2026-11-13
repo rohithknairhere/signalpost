@@ -206,6 +206,17 @@ class Fetcher:
             self._host_next[host] = time.monotonic() + self.per_host_interval
 
     # ---- robots -------------------------------------------------------
+    def sitemaps(self, url: str) -> list[str]:
+        """Sitemap URLs the site declares in its robots.txt (already fetched for politeness checks)."""
+        parsed = urllib.parse.urlparse(url)
+        key = f"{parsed.scheme}://{parsed.netloc}".lower()
+        with self._robots_lock:
+            parser = self._robots.get(key)
+        try:
+            return list(parser.site_maps() or []) if parser is not None else []
+        except Exception:
+            return []
+
     def robots_allowed(self, url: str, module: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         key = f"{parsed.scheme}://{parsed.netloc}".lower()

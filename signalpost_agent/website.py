@@ -704,6 +704,11 @@ def _research_one(fetcher: Fetcher, identity: Identity, url: str, source: str, *
                 feed = None
             if feed is not None and feed.raw and _same_site(feed.url, domain):
                 pages.append(feed)
+    if verdict["verdict"] == "exact" and ownership == "own" and fetcher.can_spend(5):
+        try:
+            pages.extend(_sitemap_pages(fetcher, home, domain, already={page.url for page in pages}))
+        except BudgetExhausted:
+            pass
     result = {"url": url, "final_url": home.url, "domain": domain, "source": source, **verdict}
     if verdict["verdict"] == "exact":
         result["ownership"] = ownership
@@ -811,8 +816,8 @@ def _page_record(page: Page) -> dict[str, Any]:
 # ---------------------------------------------------------------- extraction
 
 def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership: str = "own") -> dict[str, Any]:
-    feeds = [page for page in pages if page.kind == "feed"]
-    pages = [page for page in pages if page.kind != "feed"]  # feeds hold article text, not company facts
+    feeds = [page for page in pages if page.kind in {"feed", "sitemap", "article", "job"}]
+    pages = [page for page in pages if page.kind not in {"feed", "sitemap", "article", "job"}]  # article text holds no company facts
     home = pages[0]
     socials: dict[tuple[str, str], dict[str, Any]] = {}
     jsonld_orgs: list[dict[str, Any]] = []
@@ -934,7 +939,7 @@ def extract_facts(pages: list[Page], identity: Identity, domain: str, ownership:
     # News, jobs and careers pages are only taken from the company's own site, never a shared or brand site.
     careers = next((page for page in pages if page.kind == "careers" and page.text), None) if own_site else None
     news = extract_news(pages + feeds, domain) if own_site else []
-    job_postings = extract_job_postings(pages, domain) if own_site else []
+    job_postings = extract_job_postings(pages + feeds, domain) if own_site else []
     founding = next((str(node.get("foundingDate")) for node in jsonld_orgs if node.get("foundingDate")), None)
     return {
         "brand_name": brand or None,
@@ -971,6 +976,9 @@ def extract_addresses(text: str, limit: int = 5) -> list[str]:
     return found
 
 
+DEADLINE_RE = re.compile(r"(?:s\u00f8knadsfrist|soknadsfrist|application deadline|deadline)\s*:?\s*([0-9]{1,2}\.\s*[0-9]{1,2}\.\s*20[0-9]{2}|[0-9]{1,2}\.?\s+[A-Za-z\u00e6\u00f8\u00e5]+\.?\s+20[0-9]{2}|20[0-9]{2}-[0-9]{2}-[0-9]{2})", re.I)
+
+
 def extract_job_postings(pages: list[Page], domain: str, limit: int = 15) -> list[dict[str, Any]]:
     """schema.org JobPosting published on the company's own pages (still open only)."""
     today_iso = date.today().isoformat()
@@ -992,7 +1000,91 @@ def extract_job_postings(pages: list[Page], domain: str, limit: int = 15) -> lis
             found.setdefault(f"{title}|{url}", {"title": title, "date_posted": posted or None, "valid_through": valid or None, "location": city,
                                                "employment_type": node.get("employmentType") if isinstance(node.get("employmentType"), str) else None,
                                                "url": str(url), "found_on": page.url, "sha256": page.sha256, "retrieved_at": page.retrieved_at})
+    for page in pages:
+        if page.kind != "job" or page.soup is None or any(item["found_on"] == page.url for item in found.values()):
+            continue
+        match = DEADLINE_RE.search(page.text)
+        deadline = _parse_date(match.group(1)) if match else None
+        heading = page.soup.select_one("h1")
+        title = clean_text(heading.get_text(" ") if heading is not None else "", 160)
+        if title and deadline and deadline >= today_iso:
+            # An open position on the company's own site, with its application deadline still ahead.
+            found.setdefault(f"{title}|{page.url}", {"title": title, "date_posted": None, "valid_through": deadline, "location": None, "employment_type": None,
+                                                     "url": page.url, "found_on": page.url, "sha256": page.sha256, "retrieved_at": page.retrieved_at})
     return sorted(found.values(), key=lambda item: item.get("date_posted") or "", reverse=True)[:limit]
+
+
+NEWS_PATH_RE = re.compile(r"/(nyhet|nyheter|news|aktuelt|artikler|artikkel|blogg?|presse|pressemelding|innlegg|post|posts|arkiv)(/|-)", re.I)
+JOB_PATH_RE = re.compile(r"/(ledige-stillinger|stillinger|stilling|jobb|jobber|karriere|career|careers|jobs|job)/[^/?#]{6,}", re.I)
+
+
+def _sitemap_entries(page: Page) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(child sitemaps, url entries) as (loc, lastmod) pairs, parsed as XML."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(page.raw.encode("utf-8", "ignore"))
+    except ET.ParseError:
+        return [], []
+    children, urls = [], []
+    for node in root:
+        tag = node.tag.rsplit("}", 1)[-1]
+        fields = {child.tag.rsplit("}", 1)[-1]: (child.text or "").strip() for child in node}
+        if not fields.get("loc"):
+            continue
+        (children if tag == "sitemap" else urls).append((fields["loc"], fields.get("lastmod", "")[:10]))
+    return children, urls
+
+
+def _sitemap_pages(fetcher: Fetcher, home: Page, domain: str, *, already: set[str], max_articles: int = 2, max_jobs: int = 2) -> list[Page]:
+    """Recent news articles and job pages listed in the company's own sitemap (up to ~6 requests)."""
+    declared = [url for url in fetcher.sitemaps(home.url) if _same_site(url, domain) and not url.endswith(".gz")]
+    start = declared[0] if declared else urllib.parse.urljoin(home.url, "/sitemap.xml")
+    first = _fetch_page(fetcher, start, "sitemap")
+    if not first.raw:
+        return []
+    children, urls = _sitemap_entries(first)
+    if children and not urls:
+        # A sitemap index: open the child most likely to hold posts/news, else the newest.
+        def rank(item: tuple[str, str]) -> tuple[int, str]:
+            loc = item[0].lower()
+            return (1 if re.search(r"post|news|nyhet|artik|blog|aktuelt|stilling|job", loc) else 0, item[1])
+        child = max((item for item in children if _same_site(item[0], domain) and not item[0].endswith(".gz")), key=rank, default=None)
+        if child is None or not fetcher.can_spend(3):
+            return []
+        _, urls = _sitemap_entries(_fetch_page(fetcher, child[0], "sitemap"))
+    today_iso = date.today().isoformat()
+    recent = sorted((item for item in urls if _same_site(item[0], domain) and item[0] not in already and item[1] <= today_iso), key=lambda item: item[1], reverse=True)
+    articles = [loc for loc, _ in recent if NEWS_PATH_RE.search(urllib.parse.urlparse(loc).path) and not re.search(r"/(tag|kategori|category|page|side)/", loc, re.I)][:max_articles]
+    jobs = [loc for loc, _ in recent if JOB_PATH_RE.search(urllib.parse.urlparse(loc).path)][:max_jobs]
+    found: list[Page] = []
+    for loc, kind in [(loc, "article") for loc in articles] + [(loc, "job") for loc in jobs]:
+        if not fetcher.can_spend(2):
+            break
+        page = _fetch_page(fetcher, loc, kind)
+        if page.soup is not None and _same_site(page.url, domain):
+            found.append(page)
+    return found
+
+
+def _article_item(page: Page, today_iso: str) -> dict[str, Any] | None:
+    """A single news article page: its own headline and its own publication date."""
+    published = ""
+    for key in ("article:published_time", "og:article:published_time", "datepublished", "date", "dc.date", "publish-date"):
+        if page.meta.get(key):
+            published = page.meta[key][:10]
+            break
+    if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", published or ""):
+        node = next((n for n in _walk_jsonld(page.jsonld) if n.get("datePublished")), None)
+        published = str(node.get("datePublished"))[:10] if node else ""
+    if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", published or "") and page.soup is not None:
+        tag = page.soup.select_one("article time[datetime], main time[datetime], time[datetime]")
+        published = _parse_date(str(tag.get("datetime"))) or "" if tag is not None else ""
+    heading = page.soup.select_one("h1") if page.soup is not None else None
+    title = clean_text(page.meta.get("og:title") or (heading.get_text(" ") if heading is not None else "") or page.title, 200)
+    if not title or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", published or "") or not ("2015-01-01" <= published <= today_iso):
+        return None
+    return {"title": title, "date": published, "url": page.url, "found_on": page.url, "sha256": page.sha256, "retrieved_at": page.retrieved_at, "method": "article_page"}
 
 
 FEED_TYPES = ("application/rss+xml", "application/atom+xml")
@@ -1053,6 +1145,11 @@ def extract_news(pages: list[Page], domain: str, limit: int = 8) -> list[dict[st
     items: dict[str, dict[str, Any]] = {}
     today_iso = date.today().isoformat()
     for page in pages:
+        if page.kind == "article":
+            item = _article_item(page, today_iso)
+            if item:
+                items.setdefault(item["url"], item)
+            continue
         if page.kind == "feed":
             for item in _feed_items(page):
                 if "2015-01-01" <= item["date"] <= today_iso and _same_site(item["url"], domain):

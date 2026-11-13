@@ -178,7 +178,8 @@ def test_synthesis_cites_evidence_and_lists_unknowns():
     synthesis = synthesize(profile, [])
     assert synthesis["sentences"] and all(s["evidence_ids"] for s in synthesis["sentences"])
     assert any(u["family"] == "official_website" for u in synthesis["unknowns"])
-    assert "Revenue grew" in synthesis["summary"]
+    assert synthesis["summary"].startswith("SANDNES ELEKTRISKE AS had revenue of NOK 10.0 m in 2025 (up 17.6% on 2024)")
+    assert "Register of Company Accounts" in synthesis["sentences"][0]["text"]
 
 
 def test_vendor_credit_and_unnamed_accounts_not_published():
@@ -410,3 +411,17 @@ def test_acronym_domain_of_registry_site_is_own():
     ident = build_identity("999999992", {**ENTITY, "navn": "ASSET MANAGEMENT PARTNER AS"}, [])
     signals = ["legal_name_on_site", "registry_phone_on_site", "registry_address_on_site"]
     assert classify_ownership(ident, [page("<html><body>x</body></html>", url="https://www.ampartner.com/")], "ampartner.com", signals, "registry_website")[0] == "own"
+
+
+def test_english_as_is_not_a_legal_form_and_renamed_companies_need_their_number():
+    from signalpost_agent.website import assess
+
+    ident = build_identity("932415313", {**ENTITY, "navn": "ISABELLA CAFE AS"}, [])
+    us_cafe = page("<html><head><title>Isabella's Cafe</title></head><body>Welcome to Isabella Cafe as a family tradition in Tinley Park, Illinois.</body></html>", url="https://isabellacafe.com/")
+    assert assess(ident, [us_cafe], "name_derived", "isabellacafe.com")["verdict"] != "exact"
+    renamed = build_identity("926734377", {**ENTITY, "navn": "CROWNSTEAD AS", "historiskeNavn": [{"navn": "IDEN CAPITAL AS"}]}, [])
+    site = page("<html><body>Crownstead AS – software and apps.</body></html>", url="https://crownstead.no/")
+    result = assess(renamed, [site], "name_derived", "crownstead.no")
+    assert result["verdict"] == "ambiguous" and "renamed_company_needs_organisation_number" in result["signals"]
+    numbered = page("<html><body>Crownstead AS · org.nr 926 734 377</body></html>", url="https://crownstead.no/")
+    assert assess(renamed, [numbered], "name_derived", "crownstead.no")["verdict"] == "exact"

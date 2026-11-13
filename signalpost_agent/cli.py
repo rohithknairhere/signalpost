@@ -212,6 +212,10 @@ def research_company(org: str, ctx: dict[str, Any]) -> dict[str, Any]:
         # Fields only the bulk file carries (or that the live record omits) fill gaps.
         for key, value in bulk_entity.items():
             entity.setdefault(key, value)
+    if bulk_entity and entity is not bulk_entity and bulk_entity.get("navn") and entity.get("navn") \
+            and normalized_name(bulk_entity["navn"]) != normalized_name(entity["navn"]):
+        # Renamed since the bulk snapshot: keep the earlier name, so identity checks know both.
+        entity = {**entity, "historiskeNavn": [*(entity.get("historiskeNavn") or []), {"navn": bulk_entity["navn"]}]}
     if not entity and len(org) != 9:
         return failed_envelope(org, run, "input is not a valid 9-digit Norwegian organisation number")
     subunits = normalize_subunits((registry.get("locations") or {}).get("body")) if (registry.get("locations") or {}).get("body") else []

@@ -50,6 +50,12 @@ def ascii_fold(value: Any) -> str:
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
 
 
+def ascii_fold_keep_case(value: Any) -> str:
+    """Like ascii_fold, but keeps upper and lower case (legal forms are written in capitals)."""
+    text = str(value or "").translate(_TRANSLATE)
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+
+
 def tokens(value: Any) -> list[str]:
     """All alphanumeric tokens after Norwegian-aware ASCII folding."""
     return re.findall(r"[a-z0-9]+", ascii_fold(value))

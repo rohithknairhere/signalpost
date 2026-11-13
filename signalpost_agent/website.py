@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)  # news feeds are read as XML separately
 
 from .net import BudgetExhausted, Fetcher, Response, local_dns_available, resolves
-from .util import ascii_fold, clean_text, compact_org_pattern, digits, normalized_name, distinctive_tokens, name_tokens, org_numbers_in_text, tokens
+from .util import ascii_fold, ascii_fold_keep_case, clean_text, compact_org_pattern, digits, normalized_name, distinctive_tokens, name_tokens, org_numbers_in_text, tokens
 
 FREE_MAIL_DOMAINS = {
     "gmail.com", "googlemail.com", "hotmail.com", "hotmail.no", "outlook.com", "outlook.no", "live.com", "live.no",
@@ -407,6 +407,19 @@ def _name_phrase_regex(name: str, with_suffix: bool) -> re.Pattern[str] | None:
     return re.compile(r"(?<![a-z0-9])" + r"[\s\-_.,&]*(?:og[\s\-_.]*)?".join(re.escape(word) for word in words) + r"(?![a-z0-9])")
 
 
+LEGAL_FORMS_CASED = ("AS", "ASA", "A/S", "ANS", "DA", "SA", "BA", "NUF", "ENK", "As", "Asa")
+
+
+def _legal_form_in_case(name: str, text: str) -> bool:
+    """The name followed by its legal form written as a legal form (upper case), not as an ordinary word."""
+    words = [w for w in tokens(name.replace("&", " og ")) if w not in {"as", "asa", "ans", "da", "sa", "nuf", "enk", "ba"}]
+    if not words:
+        return False
+    body = r"[\s\-_.,&]*(?:og[\s\-_.]*)?".join(re.escape(w) for w in words)
+    pattern = re.compile(r"(?i:" + body + r")[\s,]+(?:" + "|".join(re.escape(f) for f in LEGAL_FORMS_CASED) + r")(?![A-Za-zÆØÅæøå0-9])")
+    return bool(pattern.search(ascii_fold_keep_case(text)))
+
+
 def _name_in_head(identity: Identity, home: Page) -> bool:
     """The company's own name is the site's title / site name (not just mentioned in a list)."""
     pattern = _name_phrase_regex(identity.name, False)
@@ -441,6 +454,9 @@ def assess(identity: Identity, pages: list[Page], source: str, host: str, ignore
         signals.append("organisation_number_on_site")
     names = [identity.name] + identity.historical_names
     legal_phrase = any((pattern := _name_phrase_regex(name, True)) and pattern.search(folded) for name in names)
+    if legal_phrase and not any(_legal_form_in_case(name, all_text) for name in names):
+        # "Isabella Cafe as a family business…": the English word "as", not the Norwegian legal form AS.
+        legal_phrase = False
     base_phrase = any((pattern := _name_phrase_regex(name, False)) and pattern.search(folded) for name in names)
     if legal_phrase:
         signals.append("legal_name_on_site")
@@ -488,7 +504,7 @@ def assess(identity: Identity, pages: list[Page], source: str, host: str, ignore
     elif source in {"registry_website", "previous_verified"} and {"registry_phone_on_site", "registry_email_on_site", "registry_address_on_site"} <= set(signals) and not shared_domain:
         # The company declared this website in the official registry and the site shows its registry contact details.
         verdict, score = "exact", 0.93
-    elif domain_matches_name and legal_phrase:
+    elif domain_matches_name and legal_phrase and (site_domain.endswith(".no") or corroborators):
         verdict, score = "exact", 0.95
     elif source == "nav_employer_homepage" and legal_phrase and (domain_matches_name or corroborators):
         verdict, score = "exact", 0.93
@@ -503,6 +519,11 @@ def assess(identity: Identity, pages: list[Page], source: str, host: str, ignore
         verdict, score = "ambiguous", 0.6
     else:
         verdict, score = "unrelated", 0.2
+    if verdict == "exact" and not own and identity.historical_names:
+        # Renamed company: a site named like one of its names may belong to the other holder of that name.
+        # Only the organisation number on the site ties it to this company.
+        verdict, score = "ambiguous", 0.6
+        signals.append("renamed_company_needs_organisation_number")
     return {"verdict": verdict, "score": score, "signals": signals, "other_orgs": others[:5]}
 
 

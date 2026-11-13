@@ -9,11 +9,12 @@ and not ours is never published.
 """
 from __future__ import annotations
 
+import html
 import json
 import re
 import urllib.parse
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import warnings
@@ -372,6 +373,7 @@ class Identity:
     subunit_orgs: set[str]
     historical_names: list[str]
     postal_places: set[tuple[str, str]] = field(default_factory=set)
+    recently_renamed: bool = False
 
 
 def build_identity(org: str, entity: dict[str, Any], subunits: list[dict[str, Any]]) -> Identity:
@@ -389,13 +391,17 @@ def build_identity(org: str, entity: dict[str, Any], subunits: list[dict[str, An
             if len(street) >= 5 and "postboks" not in street and "boks" not in street.split():
                 streets.add(street)
     historical = [item.get("navn") for item in entity.get("historiskeNavn") or [] if item.get("navn")]
+    cutoff = (date.today() - timedelta(days=730)).isoformat()
+    # A name given up in the last two years (or a rename seen only as a mismatch with the bulk file, undated)
+    # may still be what other people know the company by.
+    recently_renamed = any(item.get("navn") and str(item.get("tilDato") or "9999")[:10] >= cutoff for item in entity.get("historiskeNavn") or [])
     for unit in subunits:
         text = ascii_fold(unit.get("address") or "")
         match = re.search(r"(\d{4}) ([a-z .-]+)$", text)
         if match:
             places.add((match.group(1), match.group(2).strip()))
     return Identity(org, entity.get("navn") or "", phones, emails, postcodes, streets,
-                    {item["organisation_number"] for item in subunits if item.get("organisation_number")}, historical, places)
+                    {item["organisation_number"] for item in subunits if item.get("organisation_number")}, historical, places, recently_renamed)
 
 
 def _name_phrase_regex(name: str, with_suffix: bool) -> re.Pattern[str] | None:
@@ -519,7 +525,7 @@ def assess(identity: Identity, pages: list[Page], source: str, host: str, ignore
         verdict, score = "ambiguous", 0.6
     else:
         verdict, score = "unrelated", 0.2
-    if verdict == "exact" and not own and identity.historical_names:
+    if verdict == "exact" and not own and identity.recently_renamed:
         # Renamed company: a site named like one of its names may belong to the other holder of that name.
         # Only the organisation number on the site ties it to this company.
         verdict, score = "ambiguous", 0.6
@@ -1118,7 +1124,7 @@ def _feed_items(page: Page) -> list[dict[str, Any]]:
         if tag not in {"item", "entry"}:
             continue
         fields = {child.tag.rsplit("}", 1)[-1]: child for child in node}
-        title = clean_text((fields.get("title").text if fields.get("title") is not None else "") or "", 200)
+        title = clean_text(html.unescape((fields.get("title").text if fields.get("title") is not None else "") or ""), 200)
         link_node = fields.get("link")
         link = ""
         if link_node is not None:

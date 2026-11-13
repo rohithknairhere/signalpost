@@ -419,7 +419,7 @@ def test_english_as_is_not_a_legal_form_and_renamed_companies_need_their_number(
     ident = build_identity("932415313", {**ENTITY, "navn": "ISABELLA CAFE AS"}, [])
     us_cafe = page("<html><head><title>Isabella's Cafe</title></head><body>Welcome to Isabella Cafe as a family tradition in Tinley Park, Illinois.</body></html>", url="https://isabellacafe.com/")
     assert assess(ident, [us_cafe], "name_derived", "isabellacafe.com")["verdict"] != "exact"
-    renamed = build_identity("926734377", {**ENTITY, "navn": "CROWNSTEAD AS", "historiskeNavn": [{"navn": "IDEN CAPITAL AS"}]}, [])
+    renamed = build_identity("926734377", {**ENTITY, "navn": "CROWNSTEAD AS", "historiskeNavn": [{"navn": "IDEN CAPITAL AS", "tilDato": "2026-11-03 16:45:49"}]}, [])
     site = page("<html><body>Crownstead AS – software and apps.</body></html>", url="https://crownstead.no/")
     result = assess(renamed, [site], "name_derived", "crownstead.no")
     assert result["verdict"] == "ambiguous" and "renamed_company_needs_organisation_number" in result["signals"]
@@ -442,3 +442,12 @@ def test_sitemap_articles_and_job_pages_from_own_site():
     job = page(f"<html><body><h1>Elektriker</h1><p>Søknadsfrist: {ahead}</p></body></html>", url="https://www.ex.no/stillinger/elektriker-bergen", kind="job")
     closed = page("<html><body><h1>Lærling</h1><p>Søknadsfrist: 01.01.2020</p></body></html>", url="https://www.ex.no/stillinger/laerling-2020", kind="job")
     assert [j["title"] for j in extract_job_postings([job, closed], "ex.no")] == ["Elektriker"]
+
+
+def test_old_renames_do_not_block_name_matches():
+    from signalpost_agent.website import assess
+
+    ident = build_identity("845721912", {**ENTITY, "navn": "HYLLESTAD BYGG AS", "historiskeNavn": [{"navn": "HYLLESTAD BYGGSERVICE AS", "tilDato": "2011-09-27 20:19:40"}]}, [])
+    assert not ident.recently_renamed
+    site = page("<html><body>Hyllestad Bygg AS – tømrer og byggmester</body></html>", url="https://hyllestadbygg.no/")
+    assert assess(ident, [site], "name_derived", "hyllestadbygg.no")["verdict"] == "exact"

@@ -70,6 +70,14 @@ def synthesize(profile: dict[str, Any], changes: list[dict[str, Any]]) -> dict[s
         if result:
             lead += f" and a net {'profit' if result_value['amount'] >= 0 else 'loss'} of {result}"
         say(lead + ", according to its annual accounts filed with the Brønnøysund Register of Company Accounts.", "revenue", "annual_result", "accounts_year", "revenue_change_yoy")
+    elif year and (result or value("equity")):
+        equity = _fmt_amount(value("equity"))
+        parts = []
+        if result:
+            parts.append(f"a net {'profit' if result_value['amount'] >= 0 else 'loss'} of {result}")
+        if equity:
+            parts.append(f"equity of {equity}")
+        say(f"{name} reported " + " and ".join(parts) + f" for {year}, according to its annual accounts filed with the Brønnøysund Register of Company Accounts.", "annual_result", "equity", "accounts_year")
     elif jobs:
         say(f"{name} is hiring: {len(jobs)} open job ad{'s' if len(jobs) != 1 else ''} on NAV, Norway's public job service, name it as employer by organisation number.", "active_job_postings")
     elif workforce:
